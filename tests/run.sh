@@ -34,6 +34,13 @@ if ! cmp -s "$OUT/NativeMaliRegs.h" NativeMaliRegs.h; then
     exit 1
 fi
 
+# The IOKit glue cannot be built here: there is no XNU header set on a host.
+# The local stubs are a syntax gate only (tests/xnu-stub/README.md); the real
+# compile is build-arm-driver.py against the kernel tree.
+printf 'check  xnu glue (stub headers, syntax only)\n'
+$CXX $CXXFLAGS -Wno-overloaded-virtual -fsyntax-only -Itests/xnu-stub -I. \
+    xnu/NativeMaliGpuService.cpp xnu/NativeMaliXnuSupport.cpp
+
 # The driver sources under test. Keep this a glob of the real source files so a
 # new file cannot be forgotten by the harness.
 SOURCES=""

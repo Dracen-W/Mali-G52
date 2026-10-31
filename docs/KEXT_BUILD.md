@@ -98,3 +98,37 @@ Mali 驱动还需要一个自己的归档脚本。
   自造一套只能证明语法。
 - 不猜 KPI 符号集、`IOProviderClass` 或匹配规则。
 - 不因为没有 kext loader 就退化成用户态直接碰寄存器；ABI 只有 `NativeMali` 一条。
+
+## 七、需要改的外部文件清单（只列清单，未执行）
+
+按清理后的 `UniXNU-merlinx`（2026-10-31 同步）核对。**这一节只是清单，本仓库没有、
+也不会去改那个仓库。**
+
+| # | 文件 | 改什么 | 备注 |
+| --- | --- | --- | --- |
+| 1 | `drivers/NativeMali/`（子模块） | `git submodule add https://github.com/Dracen-W/Mali-G52.git drivers/NativeMali` | 钉 commit，不复制文件 |
+| 2 | 组件目录（catalog） | 加一条 `kind = "driver"` 的条目：`id = "NativeMali"`、`repository`/`revision`、`source_files = ["xnu/NativeMaliGpuService.cpp", ...]`、`outputs` 里给 `libNativeMali.a`、`build_stage = "kernel"` | 清理后的检出里**没有根目录 `components.toml`**，而 `scripts/build-arm-driver.py` 会读它；先确认 catalog 是由 resolver 生成还是被清理漏了 |
+| 3 | `profiles/arch/arm64/profile.toml` | `[components] include` 加 `"NativeMali"`；`[kernel].archives` 加 `"component:NativeMali"` | 清理后的仓库用 `component:<id>` 标记，不再手写 `build-arm-driver.py <Name>` |
+| 4 | `configs/merlinx_defconfig` | 加 `CONFIG_XNU_NATIVE_MALI=y` | 这个宏是第 5 项补丁里 `#if defined(XNU_NATIVE_MALI)` 的开关 |
+| 5 | `patches/xnu/native-mali-personality.patch`（新文件）+ `patches/xnu/series` | 照 `patches/xnu/native-aes-personality.patch` 的形状，在 `iokit/KernelConfigTables.cpp` 里加一段 `#if defined(XNU_NATIVE_MALI)`：`IOClass = NativeMaliGpuService; IOProviderClass = IOPlatformDevice; IOProbeScore = 1000:32;` | 内置驱动的个性在这里，不在 `Info.plist` |
+| 6 | `scripts/make-merlinx-adt.py` | 在 `/arm-io` 下加 `node('mali', [('compatible', b'mediatek,mali\0arm,mali-valhall\0')])` | 顺序照抄 DTB；不要加 `reg`（`arm-io` 窗口够不到 `0x13040000`），地址用板级常量 |
+| 7 | `board.toml` | **可能不用改** | `[kernel] archives` 仍然存在，但 arch profile 的 `[kernel].archives` 已经接管；以构建实际读取的那份为准，改一处并记下来 |
+| 8 | `drivers/NativeMali/xnu/NativeMaliGpuService.cpp`（我们的） | 只改它的 include 路径/宏，不改逻辑 | 若第 2 项的 `source_files` 写成 `xnu/NativeMaliGpuService.cpp`，`build-arm-driver.py` 还需要 `-I drivers/NativeMali` 与 `-I drivers/NativeMali/xnu` |
+
+不支持、也不列进清单的：kext bundle、loader 第 2 版、AMFI trust cache、KPI 符号集。
+这些只在“必须走 kext”时才需要，见第二节。
+
+## 八、本仓库已经预留好的接口
+
+| 接口 | 位置 | 现状 |
+| --- | --- | --- |
+| 寄存器窗口（纯层只认这个） | `NativeMaliRegisterTarget`，实现在 `xnu/NativeMaliXnuSupport.cpp` 的 `NativeMaliXnuWindow` | 已实现；未在真机跑过 |
+| 页表页来源 | `NativeMaliPageSource` → `NativeMaliXnuPages` | 已实现，`IOBufferMemoryDescriptor` 每页一个 |
+| BO 的物理 span | `NativeMaliMemorySource` → `NativeMaliXnuBuffers` | 已实现；保留 descriptor 供 `clientMemoryForType()` |
+| 缓存维护 | `NativeMaliCacheMaintainer` → `NativeMaliXnuCache` | 已实现；`dc cvac/civac/ivac` 未在真机验证 |
+| IOKit 入口 | `xnu/NativeMaliGpuService.cpp`，类名 `NativeMaliGpuService` | 纸面实现；`Info.plist` 只是参考 |
+| 胶水的语法门 | `tests/xnu-stub/` + `tests/run.sh` 的 `check xnu glue` | 每次主机测试都编译 `xnu/*.cpp`（`-fsyntax-only`），防止胶水腐烂；**不证明 ABI** |
+| 内核/用户态边界 | `NativeMaliABI.h` | 已在 `docs/TESTING.md` 与 Goldens 里钉死 |
+
+“预留”的含义仅限：接口签名和分层已经固定，接内核时只替换 `xnu/` 背后的 XNU 调用，
+不改纯逻辑层。它不等于“已经在 XNU 上编译过”。

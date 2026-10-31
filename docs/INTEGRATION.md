@@ -11,6 +11,11 @@
 > 直接叫「ADT tool」的）。如果你说的是 `scripts/build-arm-driver.py`，第 3 节
 > 就是它；两个都要改，顺序是先 3 后 4。
 
+> 2026-10-31 更新：`UniXNU-merlinx` 清理后，归档入口改成组件目录 +
+> `profiles/*/profile.toml` 的 `component:<id>`，`build-arm-driver.py` 也从
+> catalog 读取而不是写死名单。以 `docs/KEXT_BUILD.md` 第七节的清单为准；本文的
+> `build-arm-driver.py` 代码片段保留作历史说明。
+
 ## 0. 现状与前提
 
 | 一侧 | 现成的东西 | 还缺的东西 |

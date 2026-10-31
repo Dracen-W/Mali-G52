@@ -17,6 +17,7 @@ CXX=clang++ tests/run.sh
 
 ```
 check  NativeMaliRegs.h
+check  xnu glue (stub headers, syntax only)
 build  test_abi
 run    test_abi
 PASS: Mali wire ABI layout goldens and the pure user-client checks ...
@@ -75,6 +76,10 @@ all host tests passed
 ```
 
 `tests/run.sh` 把仓库根目录的 `NativeMali*.cpp` 全部链进去，所以新增模块不用改脚本。
+它还会用 `tests/xnu-stub/` 对 `xnu/NativeMaliGpuService.cpp` 与
+`xnu/NativeMaliXnuSupport.cpp` 做一次 `-fsyntax-only` 编译：这只能证明胶水的声明和
+定义一致、接口没被改坏，**不能证明 XNU ABI**，也不是可运行产物。真正的编译是
+UniXNU 上的 `build-arm-driver.py`，见 `docs/KEXT_BUILD.md`。
 内存相关的三个测试（`test_memory`、`test_bo_table`、`test_user_client`）共用的
 host 假实现放在 `tests/FakeMaliMemory.h`：`TestPages`（页表页）、
 `FakeMemorySource`（span 表，含各种违约模式）和 `FakeCache`。
