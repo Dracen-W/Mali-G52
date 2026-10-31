@@ -1,0 +1,273 @@
+00110b80-00110bff : dvfsrc@10012000
+10001000-10001fff : scp_infra@10001000
+10007000-10007fff : toprgu@10007000
+1000d000-1000dfff : pwrap
+10012000-10012fff : dvfsrc@10012000
+1020e000-1020efff : emi@10219000
+10212000-1021207f : cq_dma@10212000
+10212080-102120ff : cq_dma@10212000
+10212100-1021217f : cq_dma@10212000
+10219000-10219fff : emi@10219000
+10226000-10226fff : emi@10219000
+10228000-10229fff : dramc@1022a000
+1022a000-1022bfff : dramc@1022a000
+1022c000-1022cfff : dramc@1022a000
+1022d000-1022dfff : emi@10219000
+1022e000-1022efff : dramc@1022a000
+10230000-10231fff : dramc@1022a000
+10232000-10233fff : dramc@1022a000
+10234000-10234fff : dramc@1022a000
+10235000-10235fff : emi@10219000
+10236000-10236fff : dramc@1022a000
+10238000-1023bfff : gce_mbox@10238000
+10440000-1044ffff : cfgreg
+10450000-104500ff : mbox0_base
+10451000-10451007 : mbox0_ctrl
+10460000-104600ff : mbox1_base
+10461000-10461007 : mbox1_ctrl
+10470000-104700ff : mbox2_base
+10471000-10471007 : mbox2_ctrl
+10480000-104800ff : mbox3_base
+10481000-10481007 : mbox3_ctrl
+10500000-1057ffff : scp@10500000
+105c0000-105c2fff : scp@10500000
+105c4000-105c4fff : scp@10500000
+105d4000-105d9fff : scp@10500000
+11000080-110000ff : i2c0@11007000
+11000100-1100017f : i2c1@11008000
+11000180-110002ff : i2c2@11009000
+11000300-110003ff : i2c3@1100f000
+11000400-1100057f : i2c4@11011000
+11000580-110005ff : i2c5@11016000
+11000600-1100067f : i2c6@1100d000
+11000680-110007ff : i2c7@11004000
+11000800-1100097f : i2c8@11005000
+11000980-110009ff : dma-controller@11000980
+11000a00-11000a7f : dma-controller@11000980
+11000a80-11000aff : dma-controller@11000980
+11000b00-11000b7f : dma-controller@11000980
+11001000-11001fff : auxadc@11001000
+11002000-1100201f : serial
+11003000-1100301f : serial
+11004000-11004fff : i2c7@11004000
+11005000-11005fff : i2c8@11005000
+11007000-11007fff : i2c0@11007000
+11008000-11008fff : i2c1@11008000
+11009000-11009fff : i2c2@11009000
+1100a000-1100afff : spi0@1100a000
+1100d000-1100dfff : i2c6@1100d000
+1100f000-1100ffff : i2c3@1100f000
+11010000-11010fff : spi1@11010000
+11011000-11011fff : i2c4@11011000
+11012000-11012fff : spi2@11012000
+11013000-11013fff : spi3@11013000
+11014000-11014fff : spi4@11014000
+11015000-11015fff : spi5@11015000
+11016000-11016fff : i2c5@11016000
+11200000-1120ffff : usb0@11200000
+11220000-11220fff : mt6768-afe-pcm@11220000
+11230000-1123ffff : mmc@11230000
+11240000-1124ffff : mmc@11240000
+11c90000-11c90fff : mmc@11240000
+11cc0000-11ccffff : usb0@11200000
+  11cc0000-11cc07ff : usb-phy@11210000
+  11cc0800-11cc08ff : usb-phy@11210000
+11cd0000-11cd0fff : mmc@11230000
+13040000-13043fff : 13040000.mali
+14002000-14002fff : smi_common@14002000
+14003000-14003fff : smi_larb0@14003000
+15021000-15021fff : smi_larb2@15021000
+16000000-16000fff : vcodec_dec@16000000
+16010000-16010fff : smi_larb1@16010000
+16020000-160203ff : vcodec_dec@16000000
+16025000-16025fff : vcodec_dec@16000000
+17010000-17010fff : smi_larb4@17010000
+17020000-17020fff : vcodec_enc@17000000
+18000000-180fffff : AXI-BUS
+1a002000-1a002fff : smi_larb3@1a002000
+40000000-4cdfffff : System RAM
+  40080000-41cbffff : Kernel code
+  41cc0000-41dcffff : reserved
+  41dd0000-427c8fff : Kernel data
+  47c80000-47dcbfff : reserved
+  4bc80000-4bcbdfff : reserved
+4ce60000-4cffffff : System RAM
+4d010000-4d010fff : persistent_ram
+4d011000-4d011fff : persistent_ram
+4d012000-4d012fff : persistent_ram
+4d013000-4d013fff : persistent_ram
+4d014000-4d014fff : persistent_ram
+4d015000-4d015fff : persistent_ram
+4d016000-4d016fff : persistent_ram
+4d017000-4d017fff : persistent_ram
+4d018000-4d018fff : persistent_ram
+4d019000-4d019fff : persistent_ram
+4d01a000-4d01afff : persistent_ram
+4d01b000-4d01bfff : persistent_ram
+4d01c000-4d01cfff : persistent_ram
+4d01d000-4d01dfff : persistent_ram
+4d01e000-4d01efff : persistent_ram
+4d01f000-4d01ffff : persistent_ram
+4d020000-4d020fff : persistent_ram
+4d021000-4d021fff : persistent_ram
+4d022000-4d022fff : persistent_ram
+4d023000-4d023fff : persistent_ram
+4d024000-4d024fff : persistent_ram
+4d025000-4d025fff : persistent_ram
+4d026000-4d026fff : persistent_ram
+4d027000-4d027fff : persistent_ram
+4d028000-4d028fff : persistent_ram
+4d029000-4d029fff : persistent_ram
+4d02a000-4d02afff : persistent_ram
+4d02b000-4d02bfff : persistent_ram
+4d02c000-4d02cfff : persistent_ram
+4d02d000-4d02dfff : persistent_ram
+4d02e000-4d02efff : persistent_ram
+4d02f000-4d02ffff : persistent_ram
+4d030000-4d030fff : persistent_ram
+4d031000-4d031fff : persistent_ram
+4d032000-4d032fff : persistent_ram
+4d033000-4d033fff : persistent_ram
+4d034000-4d034fff : persistent_ram
+4d035000-4d035fff : persistent_ram
+4d036000-4d036fff : persistent_ram
+4d037000-4d037fff : persistent_ram
+4d038000-4d038fff : persistent_ram
+4d039000-4d039fff : persistent_ram
+4d03a000-4d03afff : persistent_ram
+4d03b000-4d03bfff : persistent_ram
+4d03c000-4d03cfff : persistent_ram
+4d03d000-4d03dfff : persistent_ram
+4d03e000-4d03efff : persistent_ram
+4d03f000-4d03ffff : persistent_ram
+4d040000-4d040fff : persistent_ram
+4d041000-4d041fff : persistent_ram
+4d042000-4d042fff : persistent_ram
+4d043000-4d043fff : persistent_ram
+4d044000-4d044fff : persistent_ram
+4d045000-4d045fff : persistent_ram
+4d046000-4d046fff : persistent_ram
+4d047000-4d047fff : persistent_ram
+4d048000-4d048fff : persistent_ram
+4d049000-4d049fff : persistent_ram
+4d04a000-4d04afff : persistent_ram
+4d04b000-4d04bfff : persistent_ram
+4d04c000-4d04cfff : persistent_ram
+4d04d000-4d04dfff : persistent_ram
+4d04e000-4d04efff : persistent_ram
+4d04f000-4d04ffff : persistent_ram
+4d050000-4d050fff : persistent_ram
+4d051000-4d051fff : persistent_ram
+4d052000-4d052fff : persistent_ram
+4d053000-4d053fff : persistent_ram
+4d054000-4d054fff : persistent_ram
+4d055000-4d055fff : persistent_ram
+4d056000-4d056fff : persistent_ram
+4d057000-4d057fff : persistent_ram
+4d058000-4d058fff : persistent_ram
+4d059000-4d059fff : persistent_ram
+4d05a000-4d05afff : persistent_ram
+4d05b000-4d05bfff : persistent_ram
+4d05c000-4d05cfff : persistent_ram
+4d05d000-4d05dfff : persistent_ram
+4d05e000-4d05efff : persistent_ram
+4d05f000-4d05ffff : persistent_ram
+4d060000-4d060fff : persistent_ram
+4d061000-4d061fff : persistent_ram
+4d062000-4d062fff : persistent_ram
+4d063000-4d063fff : persistent_ram
+4d064000-4d064fff : persistent_ram
+4d065000-4d065fff : persistent_ram
+4d066000-4d066fff : persistent_ram
+4d067000-4d067fff : persistent_ram
+4d068000-4d068fff : persistent_ram
+4d069000-4d069fff : persistent_ram
+4d06a000-4d06afff : persistent_ram
+4d06b000-4d06bfff : persistent_ram
+4d06c000-4d06cfff : persistent_ram
+4d06d000-4d06dfff : persistent_ram
+4d06e000-4d06efff : persistent_ram
+4d06f000-4d06ffff : persistent_ram
+4d070000-4d070fff : persistent_ram
+4d071000-4d071fff : persistent_ram
+4d072000-4d072fff : persistent_ram
+4d073000-4d073fff : persistent_ram
+4d074000-4d074fff : persistent_ram
+4d075000-4d075fff : persistent_ram
+4d076000-4d076fff : persistent_ram
+4d077000-4d077fff : persistent_ram
+4d078000-4d078fff : persistent_ram
+4d079000-4d079fff : persistent_ram
+4d07a000-4d07afff : persistent_ram
+4d07b000-4d07bfff : persistent_ram
+4d07c000-4d07cfff : persistent_ram
+4d07d000-4d07dfff : persistent_ram
+4d07e000-4d07efff : persistent_ram
+4d07f000-4d07ffff : persistent_ram
+4d080000-4d080fff : persistent_ram
+4d081000-4d081fff : persistent_ram
+4d082000-4d082fff : persistent_ram
+4d083000-4d083fff : persistent_ram
+4d084000-4d084fff : persistent_ram
+4d085000-4d085fff : persistent_ram
+4d086000-4d086fff : persistent_ram
+4d087000-4d087fff : persistent_ram
+4d088000-4d088fff : persistent_ram
+4d089000-4d089fff : persistent_ram
+4d08a000-4d08afff : persistent_ram
+4d08b000-4d08bfff : persistent_ram
+4d08c000-4d08cfff : persistent_ram
+4d08d000-4d08dfff : persistent_ram
+4d08e000-4d08efff : persistent_ram
+4d08f000-4d08ffff : persistent_ram
+4d090000-4d090fff : persistent_ram
+4d091000-4d091fff : persistent_ram
+4d092000-4d092fff : persistent_ram
+4d093000-4d093fff : persistent_ram
+4d094000-4d094fff : persistent_ram
+4d095000-4d095fff : persistent_ram
+4d096000-4d096fff : persistent_ram
+4d097000-4d097fff : persistent_ram
+4d098000-4d098fff : persistent_ram
+4d099000-4d099fff : persistent_ram
+4d09a000-4d09afff : persistent_ram
+4d09b000-4d09bfff : persistent_ram
+4d09c000-4d09cfff : persistent_ram
+4d09d000-4d09dfff : persistent_ram
+4d09e000-4d09efff : persistent_ram
+4d09f000-4d0defff : persistent_ram
+4d0df000-4d0df1ff : persistent_ram
+4d0df200-4d0df3ff : persistent_ram
+4d0df400-4d0df5ff : persistent_ram
+4d0df600-4d0df7ff : persistent_ram
+4d0df800-4d0df9ff : persistent_ram
+4d0dfa00-4d0dfbff : persistent_ram
+4d0dfc00-4d0dfdff : persistent_ram
+4d0dfe00-4d0dffff : persistent_ram
+4d0e0000-4d0effff : persistent_ram
+4d100000-6fffffff : System RAM
+  6c000000-6c8fffff : reserved
+77000000-77feffff : System RAM
+78000000-7cdaffff : System RAM
+  7a000000-7abfffff : reserved
+7fe00000-7fefffff : System RAM
+7ffc0000-8effffff : System RAM
+  7ffc0000-7fffffff : reserved
+8fd00000-9f3effff : System RAM
+9ff00000-9ffeffff : System RAM
+a0000000-bdffffff : System RAM
+  ae000000-bdffffff : reserved
+be300000-beffffff : System RAM
+bf400000-bfbfffff : System RAM
+bfc20000-bfdfffff : System RAM
+bfe40000-bff6ffff : System RAM
+bfff0000-bfffefff : System RAM
+c0000000-13fff5fff : System RAM
+  feff6000-feffefff : reserved
+  fefff000-ffffffff : reserved
+  11a000000-13effffff : reserved
+  13f06c000-13f7b5fff : reserved
+  13f7b6000-13f7b6fff : reserved
+  13f7b7000-13f7b8fff : reserved
+  13f7b9000-13f7bbfff : reserved
+  13f7bc000-13fff5fff : reserved

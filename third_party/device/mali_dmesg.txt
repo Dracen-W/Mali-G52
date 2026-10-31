@@ -1,0 +1,11 @@
+[    0.400530] platform 13040000.mali: Linked as a consumer to ged
+[    1.364221] [GPU/MALI][INFO]@mtk_platform_device_init: initialize successfully
+[    1.365543] mali 13040000.mali: Kernel DDK version r49p1-04eac0
+[    1.367398] mali 13040000.mali: Register LUT 00070200 initialized for GPU arch 0x00070400
+[    1.368756] mali 13040000.mali: GPU identified as 0x2 arch 7.4.0 r1p0 status 0
+[    1.370608] mali 13040000.mali: No OPPs found in device tree! Scaling timeouts using 100000 kHz
+[    1.372373] mali 13040000.mali: No priority control manager is configured
+[    1.373895] mali 13040000.mali: Large page support was disabled at compile-time!
+[    1.375868] mali 13040000.mali: No memory group manager is configured
+[    1.378933] mali 13040000.mali: Probed as mali0
+[    2.472621] smb1351_delay_init_work: smb1351 parallel successfully probed.
