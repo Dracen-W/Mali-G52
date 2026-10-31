@@ -15,7 +15,9 @@ fences, and a fixed user-client ABI in the shape of NativeAdreno.
 4. `docs/TESTING.md` — what the host tests actually prove.
 5. `docs/DEVICE.md` — measured facts about this phone, with the raw lines.
 6. `docs/MTK_SOURCES.md` — where the vendor values come from and their hashes.
-7. The milestone roadmap in `workfile/` (development file, **never commit**).
+7. `docs/KEXT_BUILD.md` — what a real kernel build needs, built-in vs kext, and
+   what is still missing from the environment.
+8. The milestone roadmap in `workfile/` (development file, **never commit**).
 
 ## Non-negotiable rules
 

@@ -98,8 +98,10 @@
       client submit 锁住以上全部；24 个 mutation 各自打在不同断言上，quiesce/
       soft-stop 这一轮又加 15 个（9 个落在 `test_job_slot`，6 个落在
       `test_service`），全部被抓住。
-- [ ] **IOKit 胶水（`NativeMaliService` 子类、`NativeMaliGpuClient`、
-      `Info.plist`）**：纯逻辑已经齐了，只剩 XNU 侧能力（第 5 条）。
+- [ ] **IOKit 胶水（`NativeMaliGpuService`、`NativeMaliGpuClient`、
+      `Info.plist`）**：纸面版本已写在 `xnu/`，能在本地桩头文件下通过语法检查，
+      但**从未按真正的内核 ABI 编译**。构建需要什么见 `docs/KEXT_BUILD.md`；
+      XNU 侧能力仍缺第 5 条那几项。
 
 ## M1 平台侦察
 
@@ -107,17 +109,18 @@
       INFRA protect、topckgen `CLK_CFG_1`、mfgcfg 门状态和两路 PMIC 电压/使能，
       不改任何配置寄存器。偏移取自 `clk-mt6768-pg.c`，SPM 基址 `0x10006000`
       由 DT `scpsys` 的 reg 列表确认（`docs/DEVICE.md` 第 3 节）。
-- [ ] **在真机上跑一次 probe**：需要先有 `NativeMaliService` 和 `Info.plist`，
-      而它们依赖 XNU 侧能力（下一条）。在拿到串口输出并人工确认前，不打开
+- [ ] **在真机上跑一次 probe**：需要驱动先进内核（内置驱动或 kext，见
+      `docs/KEXT_BUILD.md`），而胶水依赖 XNU 侧能力（下一条）。在拿到串口输出并人工确认前，不打开
       `NATIVE_MALI_M2_WRITES`，也不读 `0x13040000`。
 - [ ] **XNU 侧取 DT 属性的 API**：`NativeMaliService` 里会像 NativeAdreno 那样
       `getProperty("reg")`，但自制 XNU 是否已把 DT 属性挂到 `IOPlatformDevice` 上，
       待确认（`docs/OPEN_QUESTIONS.md` 第 5 条）。
 - [ ] **物理 MMIO 映射与 GIC 注册**：同上，按 TODO 标记，接口先按 NativeAdreno 的形状
       预留（`IODeviceMemory::map` + `IOInterruptEventSource`）。
-- [ ] **`Info.plist`**：故意还没写。里面要写的 `IOClass` 是尚不存在的
-      `NativeMaliService`；先放一个匹配不上任何类的 plist 只会让第一次上机多一条
-      无用的失败日志。等 service 骨架和 XNU 能力确认后一起加。
+- [ ] **`Info.plist`**：`xnu/Info.plist` 已有一份纸面文件，`IOClass` 是代码里
+      确实存在的 `NativeMaliGpuService`，但 `IOProviderClass`、匹配规则和 bundle id
+      都未验证，也从未安装。内置驱动不使用它；kext 路线才需要它，见
+      `docs/KEXT_BUILD.md` 第二节。
 
 ## M2 电源、时钟、供电
 

@@ -253,7 +253,9 @@ M6 的完成判定选了轮询（`docs/TODO.md`）：`waitForCompletion()` 读
 需要的三处改动（ADT 节点、`build-arm-driver.py` 的三处映射、`board.toml` 一行）
 加上子模块和 `Info.plist`，全部写进 `docs/INTEGRATION.md`，可以照抄。
 
-前置条件在本仓库：`NativeMaliService` 和 `Info.plist` 还不存在（M7，卡在第 5
-条的 XNU 能力上）。在那之前加 `build-arm-driver.py NativeMali` 会让
+前置条件在本仓库：`xnu/` 里的胶水已经存在，但从未按真正的内核 ABI 编译过
+（M7，卡在第 5 条的 XNU 能力和内核构建树上）；`Info.plist` 是纸面文件，
+只有 kext 路线才用它。在那之前加 `build-arm-driver.py NativeMali` 会让
 `-Werror` 构建直接失败，所以文档里把顺序写成「先本仓库 M7，再 UniXNU」。
+具体要准备什么写进了 `docs/KEXT_BUILD.md`。
 

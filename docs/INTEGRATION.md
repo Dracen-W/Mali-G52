@@ -15,13 +15,14 @@
 
 | 一侧 | 现成的东西 | 还缺的东西 |
 | --- | --- | --- |
-| 本仓库 `Dracen-W/Mali-G52` | M0–M6 全部 host 测过的纯逻辑层、`NativeMaliRegs.h`、`NativeMaliBringup` | `NativeMaliService.h/.cpp`（IOKit 胶水）、`Info.plist` |
+| 本仓库 `Dracen-W/Mali-G52` | M0–M6 全部 host 测过的纯逻辑层、`NativeMaliRegs.h`、`NativeMaliBringup`、`xnu/` 纸面胶水与 `Info.plist` | 按内核真实 ABI 编译过的胶水；构建前置条件见 `docs/KEXT_BUILD.md` |
 | `UniXNU-merlinx` | ADT 生成器、`board.toml`、`build-arm-driver.py`、`ArmDTPlatform` | 三处接入点（下面 1、3、4） |
 
-所以**接入的前置条件在本仓库**：`NativeMaliService` 和 `Info.plist` 必须先写出来
-（M7）。在它们存在之前，只做第 1、2、4 步是安全的（一个没有驱动认领的节点不会
-匹配到任何类），但第 3 步的 plist 和第 5 步的编译项不要提前加：
-`build-arm-driver.py` 是 `-Werror` 编译，源文件不存在就直接失败。
+所以**接入的前置条件在本仓库**：胶水必须能按内核真实参数编译（M7）。
+`xnu/NativeMaliGpuService.cpp` 已存在，但只在本地桩头文件下做过语法检查；
+在它进入 `build-arm-driver.py` 之前，只做第 1、2、4 步是安全的（一个没有驱动
+认领的节点不会匹配到任何类）。`build-arm-driver.py` 是 `-Werror` 编译，
+源文件不存在或有一处 ABI 不匹配就直接失败。
 
 ## 1. 把本仓库变成子模块
 
@@ -79,7 +80,7 @@ XNU 在 merlinx 上用的**不是** MTK 那个 DTB，而是这个脚本生成的
 > A device below the window base cannot be expressed as a child; the driver then
 > takes its physical addresses from board constants.
 
-所以 M7 的 `NativeMaliService` 直接按板级常量映射（`0x13040000` GPU 窗口、
+所以 M7 的 `NativeMaliGpuService` 直接按板级常量映射（`0x13040000` GPU 窗口、
 `0x10006000` SPM、`0x10001000` INFRACFG_AO、`0x10000000` TOPCKGEN、
 `0x13000000` MFG_CFG、`0x1000D000` PWRAP），全部来自
 `tests/data/mt6768.dtb` + `docs/DEVICE.md`，有哈希可查。
@@ -144,37 +145,42 @@ parser.add_argument('component', choices=[..., 'NativeKeyStoreEvents', 'NativeAd
 # 2) 源文件映射（第 28 行）：默认是 drivers/<component>/<component>.cpp，
 #    我们只有一个入口 TU，所以往那个 dict 里加一项（NativeAdreno 也是这么做的）
 ... {'NativeAdreno':'NativeAdrenoService.cpp',
-     'NativeMali':'NativeMaliService.cpp'}.get(component, component + '.cpp')
+     'NativeMali':'xnu/NativeMaliGpuService.cpp'}.get(component, component + '.cpp')
 
 # 3) 输出目录映射（第 32 行）：往 dict 里加一项
 ... 'NativeAdreno':'native-adreno', 'NativeMali':'native-mali'}[component]
 
 # 4) NativeAdreno 那一段（第 84 行）旁边加一个分支，让 #include "NativeMali*.h"
-#    能解析。子模块就是 drivers/NativeMali，头文件和入口 TU 都在它的根目录：
+#    能解析。子模块就是 drivers/NativeMali；入口 TU 在它的 xnu/ 下，
+#    根目录还有 NativeMali*.h：
 if component == 'NativeMali':
-    command += ['-I', str(ROOT / 'drivers/NativeMali')]
+    command += ['-I', str(ROOT / 'drivers/NativeMali'),
+                '-I', str(ROOT / 'drivers/NativeMali/xnu')]
 ```
 
 第 4 处要不要加，取决于 `IOPlatformExpert.cpo.json` 里记录的命令本来有没有把
 `drivers/<component>` 放进 `-I`。NativeAdreno 显式加了自己的几个 `kits/` 路径，
 说明那条记录里没有；先按上面加上，构建成功就不必再动。
 
-这就是为什么第 0 节说 `NativeMaliService.cpp` 必须先存在：`-Werror` 下源文件
-不存在或有一个警告，整个 `build kernel` 就失败。
+这就是为什么第 0 节说胶水必须先能编译：`-Werror` 下源文件不存在或有一个警告，
+整个 `build kernel` 就失败。
 
-`NativeMaliService.cpp` 只 include 头文件；其余 `NativeMali*.cpp` 由谁编译、
+`xnu/NativeMaliGpuService.cpp` 只 include 头文件；其余 `NativeMali*.cpp` 由谁编译、
 如何链进内核，照 `NativeAdreno` 现在的方式办（`NativeAdreno` 的 29 个 `.cpp` 也
 不是这个脚本编的）。本仓库的 `NativeMali*.cpp` 都不 include 别的 `.cpp`，所以
-它们各自独立编译即可，`tests/run.sh` 就是这么做的。
+它们各自独立编译即可，`tests/run.sh` 就是这么做的。多 TU 归档成
+`libNativeMali.a` 的做法见 `docs/KEXT_BUILD.md` 第四节。
 
-## 4. kext 的 `Info.plist`（M7，等类存在再加）
+## 4. `Info.plist`（只有 kext 路线需要；内置驱动不用）
 
 `IOClass` 必须是真的类名，不然第一次上机只会多一条无用的失败日志
-（`docs/TODO.md` M1 的最后一条）。
+（`docs/TODO.md` M1 的最后一条）。代码里的类是 `NativeMaliGpuService`
+（`xnu/NativeMaliGpuService.cpp`），下面的示例已与它一致；`IOProviderClass`
+和匹配规则仍未在目标上验证（见 `docs/KEXT_BUILD.md`、`docs/UNVERIFIED.md`）。
 
 ```xml
 <key>IOKitPersonalities</key><dict><key>merlinx MT6768 Mali</key><dict>
-  <key>IOClass</key><string>NativeMaliService</string>
+  <key>IOClass</key><string>NativeMaliGpuService</string>
   <key>IOProviderClass</key><string>IOPlatformDevice</string>
   <key>IONameMatch</key><string>mediatek,mali</string>
   <key>IOProbeScore</key><integer>1000</integer>
@@ -186,7 +192,8 @@ if component == 'NativeMali':
 
 ## 5. 顺序
 
-1. 本仓库：写 `NativeMaliService.h/.cpp` + `Info.plist`（M7），`tests/run.sh` 仍全绿。
+1. 本仓库：让 `xnu/` 胶水按内核真实参数编译通过（M7），`tests/run.sh` 仍全绿；
+   需要什么见 `docs/KEXT_BUILD.md`。
 2. `UniXNU-merlinx`：第 2.1 节的 ADT 节点。
 3. `UniXNU-merlinx`：第 3 节的 `build-arm-driver.py` 三处 + `board.toml` 一行。
 4. `UniXNU-merlinx`：第 1 节的子模块。
@@ -200,10 +207,10 @@ if component == 'NativeMali':
 # 节点在不在、属性对不对
 ioreg -l -p IODeviceTree | grep -i mali
 # 驱动有没有绑上（IOClass 出现说明 probe 跑过）
-ioreg -r -c NativeMaliService -l
+ioreg -r -c NativeMaliGpuService -l
 ```
 
-`NativeMaliService::start()` 的第一段（M1）只读：`NativeMaliPower::probe()` 读
+`NativeMaliGpuService::start()` 的第一段（M1）只读：`NativeMaliPower::probe()` 读
 SPM 状态、INFRACFG protect、topckgen 的 `CLK_CFG_1`、mfgcfg 门状态和两路 PMIC
 电压。**先看这一段的输出**，把 `docs/DEVICE.md` 里「等上机」的几条补上，再谈
 `NATIVE_MALI_M2_WRITES`。

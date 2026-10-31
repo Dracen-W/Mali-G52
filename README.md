@@ -22,7 +22,7 @@ until every step of a milestone has passed; a failed step quiesces and stops.
 | M4 MMU and page tables | ARM_MALI_LPAE page tables built and host-tested; AS slot allocation (reset after a GPU reset), MMU enable/disable, AS fault decoding, range `FLUSH_PT` and the non-coherent page-table publish behind `NATIVE_MALI_M4_WRITES`; MMU interrupt path open |
 | M5 memory objects and cache maintenance | non-coherent decision recorded; spans, mapping through `NativeMaliMmu::flushRange()`, the clean/invalidate policy and the injected cache interface host-tested; the XNU allocator and cache primitives are open |
 | M6 jobs | the Bifrost v7 job header and WRITE_VALUE payload packed from the pinned Mesa XML in 64-byte slots with a Next chain, the `panfrost_job_hw_submit()` slot handshake, a polled `JOB_INT_RAWSTAT` completion wait and per-slot software fence seqnos, all behind `NATIVE_MALI_M6_WRITES` and host-tested; interrupt-driven completion notification open |
-| M7 UserClient and ABI | the fixed-size wire ABI (`NativeMaliABI.h`), its pure checks, the BO half of the client state machine (`NativeMaliBoTable`), the rest of it (`NativeMaliUserClient`: Query/GetDeviceInfo, submit with slot choice and flush id, own-fence bookkeeping, dependency waits, polled completion, fail-closed close/teardown, and the device-wide Reset selector forwarded to the service) and the device-wide owner (`NativeMaliService`: one AS per open client, start/stop gates, the reset with its job-manager quiesce and counted soft-stop timeout that reprograms every client AS and reports destroyed fences) are written and host-tested; only the IOUserClient subclass and its `Info.plist` wait on the XNU capabilities |
+| M7 UserClient and ABI | the fixed-size wire ABI (`NativeMaliABI.h`), its pure checks, the BO half of the client state machine (`NativeMaliBoTable`), the rest of it (`NativeMaliUserClient`: Query/GetDeviceInfo, submit with slot choice and flush id, own-fence bookkeeping, dependency waits, polled completion, fail-closed close/teardown, and the device-wide Reset selector forwarded to the service) and the device-wide owner (`NativeMaliService`: one AS per open client, start/stop gates, the reset with its job-manager quiesce and counted soft-stop timeout that reprograms every client AS and reports destroyed fences) are written and host-tested; the IOKit glue exists as paper code in `xnu/` and has never been compiled against the kernel ABI (see `docs/KEXT_BUILD.md`) |
 | M8..M10 | not started |
 
 Cross-milestone: `NativeMaliBringup` runs M1 → M2 → M3 → M4 in one call in the
@@ -88,6 +88,7 @@ next milestone. `docs/TODO.md` lists code that is deliberately unimplemented.
 | `docs/DEVICE.md` | the facts measured on the phone, with the raw lines they come from |
 | `docs/UPSTREAM.md` | which upstream supplies which facts, and how to refresh it |
 | `docs/INTEGRATION.md` | how to wire this driver into UniXNU-merlinx: ADT node, submodule, `build-arm-driver.py`, `board.toml`, `Info.plist` |
+| `docs/KEXT_BUILD.md` | what a real kernel build needs: built-in driver vs kext, the measured local toolchain gaps, and the minimal inputs still missing |
 | `AGENTS.md` | rules for agents working here: citations, write gate, tests, commits |
 
 Planned module names, mirroring Adreno740 (its files are still named NativeAdreno*) one for one:
