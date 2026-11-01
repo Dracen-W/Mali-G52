@@ -59,6 +59,7 @@ public:
         VgpuVosel = 0x1526,
         VsramEnable = 0x1BC8,
         VsramVosel = 0x1BF4,
+        PseqId = 0x0A00,
         EnableMask = 0x1u << 0,
         VoselMask = 0x7F
     };
@@ -91,6 +92,7 @@ public:
     static bool encode(uint32_t microvolts, uint16_t *selector);
     static bool decode(uint16_t selector, uint32_t *microvolts);
 
+    IOReturn readPmicId(uint16_t *id);
     IOReturn readVgpu(RailState *state);
     IOReturn readVsram(RailState *state);
 

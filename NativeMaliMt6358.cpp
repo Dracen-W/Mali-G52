@@ -107,6 +107,14 @@ IOReturn NativeMaliMt6358::setRail(uint16_t enable_offset,
     return kIOReturnSuccess;
 }
 
+IOReturn NativeMaliMt6358::readPmicId(uint16_t *id)
+{
+    if(!id)return kIOReturnBadArgument;
+    *id = 0;
+    if(!pwrap_)return kIOReturnNotReady;
+    return pwrap_->read(PseqId, id);
+}
+
 IOReturn NativeMaliMt6358::readVgpu(RailState *state)
 {
     return readRail(VgpuEnable, VgpuVosel, state);

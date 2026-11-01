@@ -188,6 +188,7 @@ public:
      * a const member. Safe with the GPU off: SPM and the clock blocks are always
      * powered, and the PMIC rails are readable through pwrap. */
     IOReturn probe(NativeMaliPowerObservation *observation);
+    IOReturn readPmicId(uint16_t *id);
 
     /* Read-only safety check for the GPU window (0x13040000). The block is only
      * safe to read once the four MFG domains report on in both PWR_STATUS

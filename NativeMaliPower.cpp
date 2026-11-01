@@ -294,6 +294,12 @@ IOReturn NativeMaliPower::powerOff(const Domain &domain,
     return waitStatusOff(domain.status, timeout_us);
 }
 
+IOReturn NativeMaliPower::readPmicId(uint16_t *id)
+{
+    if(!prepared())return kIOReturnNotReady;
+    return pmic_.readPmicId(id);
+}
+
 IOReturn NativeMaliPower::probe(NativeMaliPowerObservation *observation)
 {
     if(!observation)return kIOReturnBadArgument;
