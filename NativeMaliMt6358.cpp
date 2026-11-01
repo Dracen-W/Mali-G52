@@ -2,6 +2,13 @@
 /* MT6358 GPU rails; every address and its citation is in NativeMaliMt6358.h. */
 #include "NativeMaliMt6358.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
+static void voltageMark(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+
 IOReturn NativeMaliMt6358::prepare(NativeMaliPwrap *pwrap)
 {
     if(!pwrap || !pwrap->prepared())return kIOReturnBadArgument;
@@ -141,14 +148,18 @@ IOReturn NativeMaliMt6358::setFixed()
 
     RailState vsram_before;
     RailState vgpu_before;
+    voltageMark(9, "V1 read VSRAM");
     IOReturn result = readVsram(&vsram_before);
     if(result != kIOReturnSuccess)return result;
+    voltageMark(10, "V2 read VGPU");
     result = readVgpu(&vgpu_before);
     if(result != kIOReturnSuccess)return result;
 
+    voltageMark(11, "V3 write VSRAM");
     result = setVsram(FixedVsramMicrovolts);
     if(result != kIOReturnSuccess)return result;
 
+    voltageMark(12, "V4 write VGPU");
     result = setVgpu(FixedVgpuMicrovolts);
     if(result != kIOReturnSuccess) {
         restoreRail(VsramEnable, VsramVosel, vsram_before);
