@@ -165,5 +165,6 @@ IOReturn NativeMaliMt6358::setFixed()
         restoreRail(VsramEnable, VsramVosel, vsram_before);
         return result;
     }
+    voltageMark(13, "VOK");
     return kIOReturnSuccess;
 }
