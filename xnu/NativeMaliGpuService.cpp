@@ -41,6 +41,8 @@
 #include "NativeMaliUserClient.h"
 #include "NativeMaliXnuSupport.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
 namespace {
 
 /* The Mali node and the five blocks M2 programs. The GPU window is the
@@ -372,6 +374,8 @@ bool NativeMaliGpuService::start(IOService *provider)
         state.power.vgpu.enabled, state.power.vgpu.microvolts,
         state.power.vsram.enabled, state.power.vsram.microvolts,
         state.gpu.gpuId, state.gpu.ias, state.gpu.oas);
+    if(native_gop_text)
+        native_gop_text(21, status == kIOReturnSuccess ? "MALI OK" : "MALI PROBE");
     if(status != kIOReturnSuccess) {
         if(status == kIOReturnUnsupported)
             IOLog("NativeMali: GPU not brought up: writes are compiled out (NATIVE_MALI_M2_WRITES/M3_WRITES)\n");
