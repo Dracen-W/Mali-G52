@@ -372,6 +372,19 @@ bool NativeMaliGpuService::start(IOService *provider)
     }
     pwrap_window_.bind(base, kPowerWindowBytes);
 
+    /* Mapping self-check: GICD_PIDR2 is a known register ArmCpu also reads. */
+    IOMemoryMap *gic_map = nullptr;
+    volatile uint8_t *gic = nullptr;
+    if(mapFixedWindow(0x0C000000, 0x10000, &gic_map, &gic) ==
+        kIOReturnSuccess && gic && native_gop_text) {
+        char gicLine[32];
+        const uint32_t pidr2 =
+            *reinterpret_cast<volatile uint32_t *>(gic + 0xFFE8);
+        snprintf(gicLine, sizeof(gicLine), "MALI GIC %08x", pidr2);
+        native_gop_text(28, gicLine);
+    }
+    if(gic_map)gic_map->release();
+
     NativeMaliBringupBlocks blocks{};
     blocks.power.spm = &spm_window_;
     blocks.power.infracfg = &infracfg_window_;
