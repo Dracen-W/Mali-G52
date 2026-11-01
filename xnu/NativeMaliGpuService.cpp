@@ -251,6 +251,8 @@ void NativeMaliGpuService::releaseWindows()
 IOService *NativeMaliGpuService::probe(IOService *provider, SInt32 *score)
 {
     if(!advertisesMali(provider))return nullptr;
+    if(native_gop_text)
+        native_gop_text(20, "MALI MATCH");
     if(score)*score = 1000;
     return this;
 }
