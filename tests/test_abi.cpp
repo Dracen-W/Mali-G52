@@ -54,6 +54,26 @@ void testLayout()
     CHECK(NATIVE_MALI_ABI_MAX_BO_BYTES == (UINT64_C(1) << 27));
     CHECK(NativeMaliBoRead == 1u && NativeMaliBoWrite == 2u);
     CHECK(NativeMaliDeviceNonCoherent == 1u);
+
+    /* v2: the v1 record is a strict prefix, and the appended fields are the
+     * raw registers pan_kmod_dev_props needs plus the driver's capability
+     * constants. Offsets are asserted so a reordering cannot pass silently. */
+    CHECK(NativeMaliAbiVersion == 2);
+    CHECK(NativeMaliAbiVersionV1 == 1);
+    CHECK(sizeof(NativeMaliAbiDeviceInfo) == NativeMaliAbiDeviceInfoBytes);
+    CHECK(NativeMaliAbiDeviceInfoBytes == 112);
+    CHECK(NativeMaliAbiDeviceInfoV1Bytes == 64);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, mem_features) == 64);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, mmu_features) == 68);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, afbc_features) == 72);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, texture_features) == 76);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, max_tasks_per_core) == 92);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, registers_per_core) == 96);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, tls_instances_per_core) == 100);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, pgsize_shift) == 104);
+    CHECK(offsetof(NativeMaliAbiDeviceInfo, vm_op_flags) == 108);
+    CHECK(NativeMaliAbiPageShift == 12);
+    CHECK(NativeMaliAbiVmOpMap == 1u && NativeMaliAbiVmOpUnmap == 2u);
 }
 
 void testVersionAndMethod()

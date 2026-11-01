@@ -29,6 +29,11 @@
  * a v1 client that predates the selector never calls it, and a v1 driver that
  * predates it answers kIOReturnUnsupported.
  *
+ * Version 2 appends the fields a Vulkan backend needs (mem/MMU/AFBC/texture
+ * features, derived thread properties, page shift and VM operation flags).
+ * The v1 64-byte GetDeviceInfo record is a strict prefix of v2: a v1 caller
+ * still gets 64 valid bytes, and Query echoes the version it asked for.
+ *
  * Deliberately absent, with the reason:
  *   - CreateQueue/CloseQueue. A queue would be an address space, and this
  *     device has three present address spaces (GPU_AS_PRESENT == 0x7, see
@@ -76,10 +81,14 @@
  */
 #ifndef NATIVE_MALI_ABI_H
 #define NATIVE_MALI_ABI_H
+#include <stddef.h>
 #include <stdint.h>
 
 enum {
-    NativeMaliAbiVersion = 1,
+    /* v2 appends the fields a Vulkan backend needs; the v1 record is a strict
+     * prefix of v2, and dispatch still accepts the 64-byte v1 reply. */
+    NativeMaliAbiVersion = 2,
+    NativeMaliAbiVersionV1 = 1,
 
     /* Method selectors. */
     NativeMaliMethodQuery = 1,
@@ -101,7 +110,12 @@ enum {
     /* NativeMaliVmMaxTables * NativeMaliVmPtesPerTable * NativeMaliAbiPageBytes. */
     NativeMaliAbiMaxBoBytesShift = 27,
     /* NativeMaliJobHeadAlignment. */
-    NativeMaliAbiJobChainAlign = 64
+    NativeMaliAbiJobChainAlign = 64,
+    /* log2 of NativeMaliAbiPageBytes, for pan_kmod_dev_props.pgsize_bitmap. */
+    NativeMaliAbiPageShift = 12,
+    /* The v1 GetDeviceInfo record; v2 is a strict prefix-compatible extension. */
+    NativeMaliAbiDeviceInfoV1Bytes = 64,
+    NativeMaliAbiDeviceInfoBytes = 112
 };
 
 #define NATIVE_MALI_ABI_MAX_BO_BYTES (UINT64_C(1) << NativeMaliAbiMaxBoBytesShift)
@@ -122,7 +136,14 @@ struct NativeMaliAbiQuery {
 enum {
     NativeMaliDeviceNonCoherent = 1   /* the CPU must clean/invalidate around GPU use */
 };
+/* v2 VM operation bits: what NativeMaliMemory::map()/unmap() actually support.
+ * Sparse mappings and automatic VA assignment are not in the ABI. */
+enum {
+    NativeMaliAbiVmOpMap = 1u << 0,
+    NativeMaliAbiVmOpUnmap = 1u << 1
+};
 struct NativeMaliAbiDeviceInfo {
+    /* v1 fields: a v1 caller receives exactly these 64 bytes. */
     uint32_t gpu_id;
     uint32_t shader_present_lo;
     uint32_t shader_present_hi;
@@ -137,6 +158,20 @@ struct NativeMaliAbiDeviceInfo {
     uint32_t flags;               /* NativeMaliDeviceNonCoherent */
     uint64_t va_start;            /* first GPU address a BO may map at: 0 */
     uint64_t va_size;             /* 1 << input_bits (the whole space) */
+
+    /* v2: the raw feature words a pan_kmod backend needs. Zero means the
+     * probe has not answered that register; it is never a substitute value. */
+    uint32_t mem_features;        /* GPU_MEM_FEATURES */
+    uint32_t mmu_features;        /* GPU_MMU_FEATURES; [7:0] ias, [15:8] oas */
+    uint32_t afbc_features;       /* GPU_AFBC_FEATURES */
+    uint32_t texture_features[4]; /* GPU_TEXTURE_FEATURES(0..3) */
+    /* Derived in the driver exactly as panfrost_kmod.c:138-175 does. */
+    uint32_t max_tasks_per_core;
+    uint32_t registers_per_core;
+    uint32_t tls_instances_per_core;
+    /* Driver capability constants, not measurements. */
+    uint32_t pgsize_shift;        /* NativeMaliAbiPageShift */
+    uint32_t vm_op_flags;         /* NativeMaliAbiVmOpMap | NativeMaliAbiVmOpUnmap */
 };
 
 struct NativeMaliAbiBoAlloc {
@@ -217,7 +252,10 @@ struct NativeMaliAbiStatus {
 
 #if defined(__cplusplus)
 static_assert(sizeof(NativeMaliAbiQuery) == 24, "Mali ABI query layout");
-static_assert(sizeof(NativeMaliAbiDeviceInfo) == 64, "Mali ABI device info layout");
+static_assert(sizeof(NativeMaliAbiDeviceInfo) == NativeMaliAbiDeviceInfoBytes,
+    "Mali ABI device info layout");
+static_assert(offsetof(NativeMaliAbiDeviceInfo, mem_features) ==
+    NativeMaliAbiDeviceInfoV1Bytes, "v1 record is a strict prefix of v2");
 static_assert(sizeof(NativeMaliAbiBoAlloc) == 8, "Mali ABI alloc layout");
 static_assert(sizeof(NativeMaliAbiBoAllocReply) == 8, "Mali ABI alloc reply layout");
 static_assert(sizeof(NativeMaliAbiBoMap) == 24, "Mali ABI map layout");

@@ -989,6 +989,22 @@ void testDispatch()
     Rig rig;
     rig.openOrDie(NATIVE_MALI_ABI_MAX_BO_BYTES);
 
+    /* v2 is prefix-compatible: a v1 caller asking for 64 bytes receives the
+     * same bytes as the v2 prefix. */
+    {
+        NativeMaliAbiDeviceInfo full{};
+        CHECK(rig.client.dispatch(NativeMaliMethodGetDeviceInfo, nullptr, 0,
+            &full, sizeof(full)) == kIOReturnSuccess);
+        uint8_t shortReply[NativeMaliAbiDeviceInfoV1Bytes];
+        memset(shortReply, 0xa5, sizeof(shortReply));
+        CHECK(rig.client.dispatch(NativeMaliMethodGetDeviceInfo, nullptr, 0,
+            shortReply, sizeof(shortReply)) == kIOReturnSuccess);
+        CHECK(memcmp(shortReply, &full, sizeof(shortReply)) == 0);
+        uint8_t odd[70];
+        CHECK(rig.client.dispatch(NativeMaliMethodGetDeviceInfo, nullptr, 0,
+            odd, sizeof(odd)) == kIOReturnBadArgument);
+    }
+
     /* Unknown selector: unsupported, and not one output byte changes. */
     uint8_t canary[sizeof(NativeMaliAbiDeviceInfo)];
     memset(canary, 0xa5, sizeof(canary));

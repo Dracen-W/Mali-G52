@@ -260,7 +260,7 @@ M6 的完成判定选了轮询（`docs/TODO.md`）：`waitForCompletion()` 读
 具体要准备什么写进了 `docs/KEXT_BUILD.md`。
 
 
-## 17. NativeMali ABI v2：PanVK 需要的 `pan_kmod_dev_props` 字段 —— 需要决定
+## 17. NativeMali ABI v2：PanVK 需要的 `pan_kmod_dev_props` 字段 —— **已实现，等数值**
 
 MaliMetal 的「把 `pan_kmod` 后端接到 `NativeMali`」这件事卡在这里，不是代码问题。
 
@@ -305,7 +305,7 @@ shader/tiler present、`thread_max_threads`、`max_workgroup_size`、
 Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如上，
 不是凭记忆抄的。
 
-### 17.1 提议的 v2 `GetDeviceInfo` 布局（草案，未进头文件）
+### 17.1 v2 `GetDeviceInfo` 布局（**已进头文件**，v1 前缀兼容）
 
 记录从 64 字节扩到 112 字节。字段顺序按现有 v1 记录追加，避免移动已有偏移；
 版本号升到 2，v1 客户端继续被接受（旧长度 + 旧版本），v2 客户端拒绝 v1 回复。
@@ -343,5 +343,10 @@ Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如
 - `pgsize_bits` 与 `vm_op_flags` 不是“测出来”的，是驱动能力常量：4 KiB 页由
   `NativeMaliVmGranule` 决定；VM 操作位图由 `NativeMaliMemory::map()` 实际支持的
   操作决定，写进记录是为了让后端不用猜。
-- **在头文件里改之前需要一次明确的 ABI 决定**（本仓库规则：ABI 变更要有记录、
-  测试和两个仓库的对齐）。这份草案是给那次决定用的，不是已经生效的接口。
+- 已落地：`NativeMaliABI.h` 版本 2、112 字节、`offsetof` 断言、
+  `tests/test_abi.cpp` 黄金用例、`tests/test_user_client.cpp` 的 v1 64 字节兼容用例；
+  MaliMetal 的 `deps/abi.sha256` 与客户端已同步。
+- `Query` 接受版本 1 或 2，并回显调用方请求的版本；`GetDeviceInfo` 按调用方缓冲区
+  大小（64 或 112）返回，两者前 64 字节完全一致。
+- 剩下的只是真机数值：`mmu_features` 等为 0 表示“probe 还没回答”，后端必须拒绝
+  创建设备，不能当作真实值。

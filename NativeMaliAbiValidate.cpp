@@ -12,7 +12,10 @@ constexpr uint64_t kVaSize = UINT64_C(1) << 48;
 
 IOReturn NativeMaliAbiValidate::version(uint32_t abiVersion)
 {
-    return abiVersion == NativeMaliAbiVersion ? kIOReturnSuccess :
+    /* v1 clients keep working: the reply echoes the version they asked for,
+     * and GetDeviceInfo accepts both record sizes. */
+    return (abiVersion == NativeMaliAbiVersion ||
+        abiVersion == NativeMaliAbiVersionV1) ? kIOReturnSuccess :
         kIOReturnUnsupported;
 }
 

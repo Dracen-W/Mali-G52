@@ -96,7 +96,7 @@ IOReturn NativeMaliUserClient::query(const NativeMaliAbiQuery &request,
     if(result != kIOReturnSuccess)return result;
     if(!open_)return kIOReturnNotReady;
 
-    reply->abi_version = NativeMaliAbiVersion;
+    reply->abi_version = request.abi_version;
     reply->input_bits = vm_->info().ias;
     reply->output_bits = vm_->info().oas;
     reply->flags = 0;
@@ -124,6 +124,19 @@ IOReturn NativeMaliUserClient::deviceInfo(NativeMaliAbiDeviceInfo *reply)
     reply->flags = bo_.coherent() ? 0 : NativeMaliDeviceNonCoherent;
     reply->va_start = 0;
     reply->va_size = UINT64_C(1) << vm_->info().ias;
+
+    /* v2 fields. A v1 caller receives only the first 64 bytes, which are the
+     * same layout; dispatch copies min(requested, sizeof). */
+    reply->mem_features = observation_.memFeatures;
+    reply->mmu_features = observation_.mmuFeatures;
+    reply->afbc_features = observation_.afbcFeatures;
+    for(uint32_t index = 0; index < 4; ++index)
+        reply->texture_features[index] = observation_.textureFeatures[index];
+    reply->max_tasks_per_core = observation_.maxTasksPerCore;
+    reply->registers_per_core = observation_.registersPerCore;
+    reply->tls_instances_per_core = observation_.tlsInstancesPerCore;
+    reply->pgsize_shift = NativeMaliAbiPageShift;
+    reply->vm_op_flags = NativeMaliAbiVmOpMap | NativeMaliAbiVmOpUnmap;
     return kIOReturnSuccess;
 }
 
@@ -284,8 +297,17 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
     const size_t expected_out = outputSize(method);
     if(expected_in == kUnsupportedSize || expected_out == kUnsupportedSize)
         return kIOReturnUnsupported;
-    if(input_size != expected_in || output_size != expected_out)
+    if(input_size != expected_in)
         return kIOReturnBadArgument;
+    /* GetDeviceInfo accepts the v1 record as well: v2 is a strict prefix
+     * extension, and the caller's buffer size says which it wants. */
+    if(method == NativeMaliMethodGetDeviceInfo) {
+        if(output_size != NativeMaliAbiDeviceInfoV1Bytes &&
+            output_size != expected_out)
+            return kIOReturnBadArgument;
+    } else if(output_size != expected_out) {
+        return kIOReturnBadArgument;
+    }
     if((expected_in != 0 && !input) || (expected_out != 0 && !output))
         return kIOReturnBadArgument;
 
@@ -305,7 +327,8 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
         NativeMaliAbiDeviceInfo reply{};
         const IOReturn result = deviceInfo(&reply);
         if(result != kIOReturnSuccess)return result;
-        memcpy(output, &reply, sizeof(reply));
+        /* v1 callers asked for 64 bytes; copy exactly what they asked for. */
+        memcpy(output, &reply, output_size);
         return kIOReturnSuccess;
     }
     case NativeMaliMethodBoAlloc: {
