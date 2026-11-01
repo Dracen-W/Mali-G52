@@ -44,7 +44,8 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
      * snapshot taken before the voltage, clocks and domains were enabled. */
     if(state) {
         NativeMaliPowerObservation after;
-        if(power_.probe(&after) == kIOReturnSuccess)state->power = after;
+        (void)power_.probe(&after);
+        state->power = after;
     }
 
     /* M3: identify before allocating an address space, the order

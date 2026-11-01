@@ -294,6 +294,11 @@ IOReturn NativeMaliPower::powerOff(const Domain &domain,
     return waitStatusOff(domain.status, timeout_us);
 }
 
+bool NativeMaliPower::writesAuthorized()
+{
+    return kWriteAuthorized;
+}
+
 IOReturn NativeMaliPower::readPmicId(uint16_t *id)
 {
     if(!prepared())return kIOReturnNotReady;

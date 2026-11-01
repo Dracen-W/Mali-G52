@@ -172,6 +172,7 @@ public:
 
     /* False unless the build explicitly opts in; see the header comment. */
     static constexpr bool kWriteAuthorized = NATIVE_MALI_M2_WRITES != 0;
+    static bool writesAuthorized();
 
     NativeMaliPower() = default;
     ~NativeMaliPower() = default;
