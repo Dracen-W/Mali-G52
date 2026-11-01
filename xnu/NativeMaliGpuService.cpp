@@ -401,6 +401,9 @@ bool NativeMaliGpuService::start(IOService *provider)
     }
 
     if(native_gop_text) {
+#if NATIVE_MALI_M2_WRITES
+        native_gop_text(30, "MALI M2W");
+#endif
         uint16_t pmic_id = 0;
         char pmicLine[32];
         const IOReturn pmic_status = device_.bringup().power().readPmicId(&pmic_id);
