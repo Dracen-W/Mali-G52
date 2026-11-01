@@ -259,3 +259,41 @@ M6 的完成判定选了轮询（`docs/TODO.md`）：`waitForCompletion()` 读
 `-Werror` 构建直接失败，所以文档里把顺序写成「先本仓库 M7，再 UniXNU」。
 具体要准备什么写进了 `docs/KEXT_BUILD.md`。
 
+
+## 17. NativeMali ABI v2：PanVK 需要的 `pan_kmod_dev_props` 字段 —— 需要决定
+
+MaliMetal 的「把 `pan_kmod` 后端接到 `NativeMali`」这件事卡在这里，不是代码问题。
+
+Mesa 26.2.6 的 `src/panfrost/lib/kmod/pan_kmod.h:193-260` 定义
+`struct pan_kmod_dev_props`，`pan_kmod_dev_create()` 之后的所有后端与 PanVK 初始化都
+读它。它要求：
+
+- `gpu_id`、`gpu_variant`
+- `shader_present`、`tiler_features`
+- `mem_features`、`mmu_features`（低 8 位是 VA bits）
+- `texture_features[4]`、`l2_features`
+- `max_threads_per_core`、`max_tasks_per_core`、`max_threads_per_wg`
+- `num_registers_per_core`、`max_tls_instance_per_core`
+- `afbc_features`
+- `pgsize_bitmap`、`supported_vm_op_flags`
+- `gpu_can_query_timestamp`、`timestamp_device_coherent`、`timestamp_frequency`
+
+现有 v1 `GetDeviceInfo`（`NativeMaliABI.h` 方法 2）只有：`gpu_id`、
+shader/tiler present、`thread_max_threads`、`max_workgroup_size`、
+`max_barrier_size`、`l2/core/tiler_features`、非一致标志、`va_start/va_size`。
+缺的恰好是上表里的大部分。
+
+两条路：
+
+1. **v2 `GetDeviceInfo`**：把上表剩余字段加进 ABI（记录长度变化，版本升到 2），
+   内核 `NativeMaliGpuCore::probe()` 增加对应寄存器读取。需要先量到：
+   `GPU_MMU_FEATURES`（ias/oas/VA bits）、`GPU_MEM_FEATURES`、
+   `GPU_TEXTURE_FEATURES_0..3`、`GPU_AFBC_FEATURES`、`GPU_THREAD_*`（已有部分）、
+   variant 位。这些都在 `Mali-G52/docs/DEVICE.md` 的「等上机」清单里。
+2. **后端自己读寄存器**：违反本仓库「用户态不碰 MMIO」的规则，不考虑。
+
+在拿到这些寄存器值并人工确认前，MaliMetal 的 `patches/mesa/0002-*` 保持不存在；
+`0001` 的「无 DRM fd 的设备创建」已编译通过，但它只提供一个空壳，不填 props。
+
+Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如上，
+不是凭记忆抄的。
