@@ -45,6 +45,11 @@ extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((
 
 namespace {
 
+static void maliMark(const char *text)
+{
+    if(native_gop_text)native_gop_text(23, text);
+}
+
 /* The Mali node and the five blocks M2 programs. The GPU window is the
  * provider's own reg; the others are separate DT nodes whose bases are fixed in
  * the vendor DTS and quoted in NativeMaliPower.h/NativeMaliPwrap.h.
@@ -261,10 +266,12 @@ bool NativeMaliGpuService::start(IOService *provider)
 {
     if(!IOService::start(provider))return false;
     if(!provider || !lock_) {
+        maliMark("MALI E1 lock");
         IOLog("NativeMali: no provider or no session lock\n");
         stop(provider);
         return false;
     }
+    maliMark("MALI START");
 
     OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
     NativeMaliWindow windows[2]{};
@@ -275,6 +282,7 @@ bool NativeMaliGpuService::start(IOService *provider)
         static_cast<const uint8_t *>(reg->getBytesNoCopy()), reg->getLength(),
         address_cells, size_cells, windows, 2, &count) != kIOReturnSuccess ||
         count < 1 || windows[0].base != kGpuBase || windows[0].bytes < kGpuBytes) {
+        maliMark("MALI E2 reg");
         IOLog("NativeMali: provider reg is not the 0x%llx window\n",
             static_cast<unsigned long long>(kGpuBase));
         stop(provider);
@@ -283,12 +291,14 @@ bool NativeMaliGpuService::start(IOService *provider)
 
     IODeviceMemory *gpu_memory = getDeviceMemoryWithIndex(0);
     if(!gpu_memory) {
+        maliMark("MALI E3 memory");
         IOLog("NativeMali: provider has no GPU device memory\n");
         stop(provider);
         return false;
     }
     gpu_map_ = gpu_memory->map(kIOMapAnywhere | kIOMapInhibitCache);
     if(!gpu_map_) {
+        maliMark("MALI E4 map");
         IOLog("NativeMali: GPU window did not map\n");
         stop(provider);
         return false;
@@ -297,6 +307,7 @@ bool NativeMaliGpuService::start(IOService *provider)
      * never point past the range it was handed. If the map is shorter than the
      * window the pure layers need, refuse rather than alias the next block. */
     if(gpu_map_->getLength() < kGpuBytes) {
+        maliMark("MALI E5 short");
         IOLog("NativeMali: GPU map is %llu bytes, need 0x%llx\n",
             static_cast<unsigned long long>(gpu_map_->getLength()),
             static_cast<unsigned long long>(kGpuBytes));
@@ -307,6 +318,7 @@ bool NativeMaliGpuService::start(IOService *provider)
         reinterpret_cast<volatile uint8_t *>(gpu_map_->getVirtualAddress()),
         static_cast<size_t>(gpu_map_->getLength()));
     if(!gpu_window_.bound()) {
+        maliMark("MALI E6 va");
         IOLog("NativeMali: GPU window has no virtual address\n");
         stop(provider);
         return false;
@@ -315,6 +327,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     volatile uint8_t *base = nullptr;
     if(mapFixedWindow(kSpmBase, kPowerWindowBytes, &spm_map_, &base) !=
         kIOReturnSuccess) {
+        maliMark("MALI E7 spm");
         IOLog("NativeMali: SPM window did not map\n");
         stop(provider);
         return false;
@@ -322,6 +335,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     spm_window_.bind(base, kPowerWindowBytes);
     if(mapFixedWindow(kInfracfgBase, kPowerWindowBytes, &infracfg_map_, &base) !=
         kIOReturnSuccess) {
+        maliMark("MALI E8 infracfg");
         IOLog("NativeMali: INFRACFG window did not map\n");
         stop(provider);
         return false;
@@ -329,6 +343,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     infracfg_window_.bind(base, kPowerWindowBytes);
     if(mapFixedWindow(kTopckgenBase, kPowerWindowBytes, &topckgen_map_, &base) !=
         kIOReturnSuccess) {
+        maliMark("MALI E9 topckgen");
         IOLog("NativeMali: topckgen window did not map\n");
         stop(provider);
         return false;
@@ -336,6 +351,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     topckgen_window_.bind(base, kPowerWindowBytes);
     if(mapFixedWindow(kMfgcfgBase, kPowerWindowBytes, &mfgcfg_map_, &base) !=
         kIOReturnSuccess) {
+        maliMark("MALI E10 mfgcfg");
         IOLog("NativeMali: mfgcfg window did not map\n");
         stop(provider);
         return false;
@@ -343,6 +359,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     mfgcfg_window_.bind(base, kPowerWindowBytes);
     if(mapFixedWindow(kPwrapBase, kPowerWindowBytes, &pwrap_map_, &base) !=
         kIOReturnSuccess) {
+        maliMark("MALI E11 pwrap");
         IOLog("NativeMali: pwrap window did not map\n");
         stop(provider);
         return false;
@@ -358,6 +375,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     blocks.gpu = &gpu_window_;
     IOReturn status = device_.prepare(blocks);
     if(status != kIOReturnSuccess) {
+        maliMark("MALI E12 prepare");
         IOLog("NativeMali: prepare failed 0x%x\n", status);
         stop(provider);
         return false;
