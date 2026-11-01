@@ -458,12 +458,12 @@ bool NativeMaliGpuService::start(IOService *provider)
                 observation.topMfgClockConfig,
                 observation.mfgClockGateStatus,
                 observation.vgpu.microvolts, observation.vsram.microvolts);
-            native_gop_text(32 + stage, trace);
+            native_gop_text(9 + stage, trace);
         }
         if(state.powerStageStatus != kIOReturnSuccess) {
             snprintf(trace, sizeof(trace), "M2 ERR %08x",
                 state.powerStageStatus);
-            native_gop_text(36, trace);
+            native_gop_text(13, trace);
         }
     }
     if(status != kIOReturnSuccess) {
