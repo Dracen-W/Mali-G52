@@ -96,7 +96,8 @@ uint32_t cellProperty(IOService *provider, const char *name, uint32_t fallback)
 IOReturn mapFixedWindow(uint64_t base, uint64_t bytes,
     IOMemoryMap **map, volatile uint8_t **virtual_address)
 {
-    IODeviceMemory *memory = IODeviceMemory::withRange(base, bytes);
+    IOMemoryDescriptor *memory = IOMemoryDescriptor::withPhysicalAddress(
+        base, bytes, kIODirectionInOut);
     if(!memory)return kIOReturnNoMemory;
     *map = memory->map(kIOMapAnywhere | kIOMapInhibitCache);
     memory->release();
