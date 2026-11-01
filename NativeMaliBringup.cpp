@@ -40,6 +40,13 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     if(result != kIOReturnSuccess)return result;
     powered_ = true;
 
+    /* Re-read after M2 so the glue displays the post-power state, not the
+     * snapshot taken before the voltage, clocks and domains were enabled. */
+    if(state) {
+        NativeMaliPowerObservation after;
+        if(power_.probe(&after) == kIOReturnSuccess)state->power = after;
+    }
+
     /* M3: identify before allocating an address space, the order
      * panfrost_device_init() uses (gpu_init at :312, mmu_init at :316). */
     result = gpu_.probe(&observation_);
