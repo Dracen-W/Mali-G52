@@ -739,7 +739,7 @@ IOReturn allocateDispatch(uint32_t selector, IOExternalMethodDispatch *entry,
     if(input == NativeMaliUserClient::kUnsupportedSize ||
         output == NativeMaliUserClient::kUnsupportedSize)
         return kIOReturnUnsupported;
-    entry->action = action;
+    entry->function = action;
     entry->checkScalarInputCount = 0;
     entry->checkStructureInputSize = static_cast<uint32_t>(input);
     entry->checkScalarOutputCount = 0;
