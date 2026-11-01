@@ -304,3 +304,44 @@ shader/tiler present、`thread_max_threads`、`max_workgroup_size`、
 
 Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如上，
 不是凭记忆抄的。
+
+### 17.1 提议的 v2 `GetDeviceInfo` 布局（草案，未进头文件）
+
+记录从 64 字节扩到 112 字节。字段顺序按现有 v1 记录追加，避免移动已有偏移；
+版本号升到 2，v1 客户端继续被接受（旧长度 + 旧版本），v2 客户端拒绝 v1 回复。
+
+| 偏移 | 字段 | 类型 | 来源 |
+| --- | --- | --- | --- |
+| 0 | `gpu_id` | u32 | 已有 |
+| 4 | `shader_present_lo` / `hi` | u32 ×2 | 已有 |
+| 12 | `tiler_present_lo` / `hi` | u32 ×2 | 已有 |
+| 20 | `thread_max_threads` | u32 | 已有 |
+| 24 | `max_workgroup_size` | u32 | 已有 |
+| 28 | `max_barrier_size` | u32 | 已有 |
+| 32 | `l2_features` | u32 | 已有 |
+| 36 | `core_features` | u32 | 已有 |
+| 40 | `tiler_features` | u32 | 已有 |
+| 44 | `flags`（非一致） | u32 | 已有 |
+| 48 | `va_start` | u64 | 已有 |
+| 56 | `va_size` | u64 | 已有 |
+| 64 | `mem_features` | u32 | 新：`GPU_MEM_FEATURES` |
+| 68 | `mmu_features` | u32 | 新：`GPU_MMU_FEATURES` |
+| 72 | `afbc_features` | u32 | 新：`GPU_AFBC_FEATURES` |
+| 76 | `texture_features[4]` | u32 ×4 | 新：`GPU_TEXTURE_FEATURES(0..3)` |
+| 92 | `max_tasks_per_core` | u32 | 新：由 `thread_features` 推导 |
+| 96 | `registers_per_core` | u32 | 新：同上（v7 回落 = max_threads × 32） |
+| 100 | `tls_instances_per_core` | u32 | 新：`GPU_THREAD_TLS_ALLOC`，0 时回落 |
+| 104 | `pgsize_bits` | u32 | 新：本驱动只有 4 KiB → 12（由 `NativeMaliAbiPageBytes` 决定） |
+| 108 | `vm_op_flags` | u32 | 新：本驱动支持的 VM 操作位图（map/unmap；不含 sparse/auto-VA） |
+
+说明：
+
+- 上表偏移是按自然的 4 字节对齐排的；头文件里仍会用 `static_assert` 钉死
+  `sizeof == 112`，并由 `tests/test_abi.cpp` 加一条 v2 黄金用例。
+- `gpu_variant` 不放进记录：panfrost 后端的 `props.gpu_variant` 来自 memset（0），
+  没有寄存器来源；等有真实来源再加。
+- `pgsize_bits` 与 `vm_op_flags` 不是“测出来”的，是驱动能力常量：4 KiB 页由
+  `NativeMaliVmGranule` 决定；VM 操作位图由 `NativeMaliMemory::map()` 实际支持的
+  操作决定，写进记录是为了让后端不用猜。
+- **在头文件里改之前需要一次明确的 ABI 决定**（本仓库规则：ABI 变更要有记录、
+  测试和两个仓库的对齐）。这份草案是给那次决定用的，不是已经生效的接口。
