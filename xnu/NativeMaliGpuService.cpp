@@ -374,8 +374,14 @@ bool NativeMaliGpuService::start(IOService *provider)
         state.power.vgpu.enabled, state.power.vgpu.microvolts,
         state.power.vsram.enabled, state.power.vsram.microvolts,
         state.gpu.gpuId, state.gpu.ias, state.gpu.oas);
-    if(native_gop_text)
+    if(native_gop_text) {
+        char trace[96];
+        snprintf(trace, sizeof(trace), "MALI ID %08x VG %u VS %u",
+            state.gpu.gpuId, state.power.vgpu.microvolts,
+            state.power.vsram.microvolts);
         native_gop_text(21, status == kIOReturnSuccess ? "MALI OK" : "MALI PROBE");
+        native_gop_text(22, trace);
+    }
     if(status != kIOReturnSuccess) {
         if(status == kIOReturnUnsupported)
             IOLog("NativeMali: GPU not brought up: writes are compiled out (NATIVE_MALI_M2_WRITES/M3_WRITES)\n");
