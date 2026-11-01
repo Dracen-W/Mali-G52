@@ -278,26 +278,17 @@ bool NativeMaliGpuService::start(IOService *provider)
     size_t count = 0;
     const uint32_t address_cells = cellProperty(provider, "#address-cells", 2);
     const uint32_t size_cells = cellProperty(provider, "#size-cells", 2);
-    bool use_provider_memory = false;
-    if(reg && NativeMaliBoard::parseReg(
-        static_cast<const uint8_t *>(reg->getBytesNoCopy()), reg->getLength(),
-        address_cells, size_cells, windows, 2, &count) == kIOReturnSuccess &&
-        count >= 1 && windows[0].base == kGpuBase && windows[0].bytes >= kGpuBytes)
-        use_provider_memory = true;
-
-    if(use_provider_memory) {
-        IODeviceMemory *gpu_memory = getDeviceMemoryWithIndex(0);
-        if(!gpu_memory) {
-            maliMark("MALI E3 memory");
-            IOLog("NativeMali: provider has no GPU device memory\n");
-            stop(provider);
-            return false;
-        }
-        gpu_map_ = gpu_memory->map(kIOMapAnywhere | kIOMapInhibitCache);
-    } else {
-        /* The ADT stores property cells little-endian; the DT parser expects
-         * big-endian. The GPU window is fixed for this board, so map it the
-         * same way as the power windows instead of trusting the ADT reg. */
+    /* Provider memory is authoritative when the ADT reg resolves. The ADT
+     * stores cells little-endian, so do not feed them to the DT parser here. */
+    IODeviceMemory *gpu_memory = getDeviceMemoryWithIndex(0);
+    if(gpu_memory) {
+        IOPhysicalLength length = 0;
+        const addr64_t physical =
+            gpu_memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+        if(physical == kGpuBase && length >= kGpuBytes)
+            gpu_map_ = gpu_memory->map(kIOMapAnywhere | kIOMapInhibitCache);
+    }
+    if(!gpu_map_) {
         volatile uint8_t *fixed = nullptr;
         if(mapFixedWindow(kGpuBase, kGpuBytes, &gpu_map_, &fixed) !=
             kIOReturnSuccess || !fixed) gpu_map_ = nullptr;
