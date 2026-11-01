@@ -36,6 +36,16 @@ void fillGpu(FakeRegisterBlock &gpu)
     gpu.memory[GPU_TILER_FEATURES / 4] = 0x0F0F0F0F;
     gpu.memory[GPU_MEM_FEATURES / 4] = 0x00000007;
     gpu.memory[GPU_MMU_FEATURES / 4] = (40u << 8) | 48u;   /* oas 40, ias 48 */
+    gpu.memory[GPU_AFBC_FEATURES / 4] = 0x0000000F;
+    gpu.memory[GPU_TEXTURE_FEATURES(0) / 4] = 0x11110000;
+    gpu.memory[GPU_TEXTURE_FEATURES(1) / 4] = 0x22220000;
+    gpu.memory[GPU_TEXTURE_FEATURES(2) / 4] = 0x33330000;
+    gpu.memory[GPU_TEXTURE_FEATURES(3) / 4] = 0x44440000;
+    gpu.memory[GPU_AFBC_FEATURES / 4] = 0x0000000F;
+    gpu.memory[GPU_TEXTURE_FEATURES(0) / 4] = 0x11110000;
+    gpu.memory[GPU_TEXTURE_FEATURES(1) / 4] = 0x22220000;
+    gpu.memory[GPU_TEXTURE_FEATURES(2) / 4] = 0x33330000;
+    gpu.memory[GPU_TEXTURE_FEATURES(3) / 4] = 0x44440000;
     gpu.memory[GPU_THREAD_FEATURES / 4] = 0x00000003;
     gpu.memory[GPU_THREAD_MAX_THREADS / 4] = 256;
     gpu.memory[GPU_THREAD_MAX_WORKGROUP_SIZE / 4] = 512;
@@ -143,6 +153,15 @@ void testProbe()
     CHECK(seen.mmuFeatures == ((40u << 8) | 48u));
     CHECK(seen.ias == 48 && seen.oas == 40);
     CHECK(seen.threadFeatures == 3);
+    CHECK(seen.afbcFeatures == 0x0000000F);
+    CHECK(seen.textureFeatures[0] == 0x11110000);
+    CHECK(seen.textureFeatures[1] == 0x22220000);
+    CHECK(seen.textureFeatures[2] == 0x33330000);
+    CHECK(seen.textureFeatures[3] == 0x44440000);
+    /* panfrost_kmod.c:138-175 derivations, from the synthetic words above. */
+    CHECK(seen.maxTasksPerCore == 1);
+    CHECK(seen.registersPerCore == 3);
+    CHECK(seen.tlsInstancesPerCore == 64);
     CHECK(seen.maxThreads == 256);
     CHECK(seen.maxWorkgroupSize == 512);
     CHECK(seen.maxBarrierSize == 768);
@@ -166,7 +185,7 @@ void testProbe()
     /* Reading is the whole probe: nothing was written, and the read set is
      * exactly the registers listed in the header. */
     CHECK(rig.gpu.writes.empty());
-    CHECK(rig.gpu.readCount == 23);
+    CHECK(rig.gpu.readCount == 28);
 }
 
 void testGateBeforeGpu()

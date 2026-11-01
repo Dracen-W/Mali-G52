@@ -29,10 +29,15 @@
  *   drivers/gpu/drm/panfrost/panfrost_regs.h
  *     the register offsets, generated into NativeMaliRegs.h.
  *
- * Deliberately not read yet: AFBC, texture and coherency features. panfrost
- * reads them in the same function, but nothing before M5 uses them, and the
- * coherency register only exists on models with HW_FEATURE_COHERENCY_REG. They
- * will be added together with the model feature table, not guessed now.
+ * AFBC and the four texture feature words are read here because a Vulkan
+ * backend needs them (pan_kmod_dev_props: afbc_features, texture_features[4]).
+ * The coherency register is still not read: it only exists on models with
+ * HW_FEATURE_COHERENCY_REG, and this device is non-coherent by DTB.
+ *
+ * The pan_kmod-shaped derivations below (maxTasksPerCore, registersPerCore,
+ * tlsInstancesPerCore) mirror Mesa panfrost_kmod.c:138-175 at the pinned
+ * revision. They are computed here so the values cross the ABI once, instead
+ * of being re-derived (or guessed) in userspace.
  *
  * Safety: 0x13040000 may only be read while the MFG domains, the topckgen mux
  * and the mfgcfg gate are up (M2). probe() asks NativeMaliPower::gpuReadable()
@@ -66,6 +71,8 @@ struct NativeMaliGpuObservation {
     uint32_t tilerFeatures = 0;
     uint32_t memFeatures = 0;
     uint32_t mmuFeatures = 0;
+    uint32_t afbcFeatures = 0;
+    uint32_t textureFeatures[4]{};
     uint32_t threadFeatures = 0;
     uint32_t maxThreads = 0;
     uint32_t maxWorkgroupSize = 0;
@@ -78,6 +85,15 @@ struct NativeMaliGpuObservation {
     uint64_t l2Present = 0;
     uint64_t stackPresent = 0;
     uint32_t threadTlsAlloc = 0;
+
+    /* Derived for pan_kmod_dev_props, from the registers above:
+     *   maxTasksPerCore      = max(thread_features >> 24, 1)
+     *   registersPerCore     = thread_features & 0xffff, arch fallback
+     *   tlsInstancesPerCore  = thread_tls_alloc, or max_threads when zero
+     * (Mesa panfrost_kmod.c:138-175, pinned 26.2.6.) */
+    uint32_t maxTasksPerCore = 0;
+    uint32_t registersPerCore = 0;
+    uint32_t tlsInstancesPerCore = 0;
 
     /* Derived exactly as the source derives them: popcount of the masks. */
     uint32_t jsCount = 0;

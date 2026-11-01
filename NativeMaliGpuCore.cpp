@@ -173,6 +173,14 @@ IOReturn NativeMaliGpuCore::probe(NativeMaliGpuObservation *observation)
     observation->ias = observation->mmuFeatures & 0xFF;
     observation->oas = (observation->mmuFeatures >> 8) & 0xFF;
 
+    result = readWord(gpu_, GPU_AFBC_FEATURES, &observation->afbcFeatures);
+    if(result != kIOReturnSuccess)return result;
+    for(uint32_t index = 0; index < 4; ++index) {
+        result = readWord(gpu_, GPU_TEXTURE_FEATURES(index),
+            &observation->textureFeatures[index]);
+        if(result != kIOReturnSuccess)return result;
+    }
+
     result = readWord(gpu_, GPU_THREAD_FEATURES,
         &observation->threadFeatures);
     if(result != kIOReturnSuccess)return result;
@@ -217,6 +225,18 @@ IOReturn NativeMaliGpuCore::probe(NativeMaliGpuObservation *observation)
     result = readWord(gpu_, GPU_THREAD_TLS_ALLOC,
         &observation->threadTlsAlloc);
     if(result != kIOReturnSuccess)return result;
+
+    observation->maxTasksPerCore = observation->threadFeatures >> 24;
+    if(observation->maxTasksPerCore == 0)observation->maxTasksPerCore = 1;
+    observation->registersPerCore = observation->threadFeatures & 0xFFFF;
+    if(observation->registersPerCore == 0) {
+        /* panfrost's arch table: v7 assumes 32 registers per thread. It is a
+         * fallback for a register that reads zero, not a hardware value. */
+        observation->registersPerCore = observation->maxThreads * 32;
+    }
+    observation->tlsInstancesPerCore = observation->threadTlsAlloc;
+    if(observation->tlsInstancesPerCore == 0)
+        observation->tlsInstancesPerCore = observation->maxThreads;
 
     observation->coreCount = bits64(observation->shaderPresent);
     observation->tilerCount = bits64(observation->tilerPresent);

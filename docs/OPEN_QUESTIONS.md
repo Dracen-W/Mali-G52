@@ -292,7 +292,14 @@ shader/tiler present、`thread_max_threads`、`max_workgroup_size`、
    variant 位。这些都在 `Mali-G52/docs/DEVICE.md` 的「等上机」清单里。
 2. **后端自己读寄存器**：违反本仓库「用户态不碰 MMIO」的规则，不考虑。
 
-在拿到这些寄存器值并人工确认前，MaliMetal 的 `patches/mesa/0002-*` 保持不存在；
+内核侧已经准备到位：`NativeMaliGpuCore::probe()` 现在读取
+`GPU_AFBC_FEATURES` 与 `GPU_TEXTURE_FEATURES(0..3)`，并按
+`panfrost_kmod.c:138-175` 推导 `max_tasks_per_core`、`registers_per_core`、
+`tlsInstancesPerCore`；host 测试用合成值覆盖这些路径。`gpu_variant` 在 panfrost
+后端是 0（`panfrost_kmod.c` 的 memset），4 KiB 页大小由 MMU 决定，二者都不是
+待测寄存器。
+
+所以在拿到上述寄存器值并人工确认前，MaliMetal 的 `patches/mesa/0002-*` 保持不存在；
 `0001` 的「无 DRM fd 的设备创建」已编译通过，但它只提供一个空壳，不填 props。
 
 Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如上，

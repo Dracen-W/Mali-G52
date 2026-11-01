@@ -102,5 +102,7 @@ vendor 副本 sha256 一致，替换生效）。
 | 事实 | 怎么才能知道 |
 | --- | --- |
 | MMU VA/PA 位宽（`ias`/`oas`） | M3 读 `GPU_MMU_FEATURES`（0x014）的 [7:0] 和 [15:8]；kbase 这份日志没打印 |
+| AFBC 与 4 个 texture feature 字 | M3 的 `probe()` 现在读 `GPU_AFBC_FEATURES`（0x04C）和 `GPU_TEXTURE_FEATURES(0..3)`（0x0B0+4n）；真机值待第一次 probe 输出 |
+| `max_tasks_per_core` / `registers_per_core` / TLS | 由 `GPU_THREAD_FEATURES` 与 `GPU_THREAD_TLS_ALLOC` 按 `panfrost_kmod.c:138-175` 推导；等真机寄存器值确认推导结果 |
 | GIC 上这五条线是否真的电平低 | 现在只有设备树（0x8）与我们的人工确认；`/proc/interrupts` 只证明它们被注册了 |
 | `buck_vgpu` 的实际初始电压 | `/sys/kernel/debug/regulator/regulator_summary`（还没拿到）；M2 的 `probe()` 也会经 pwrap 读回 |
