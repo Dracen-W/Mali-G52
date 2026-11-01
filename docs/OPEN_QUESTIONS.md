@@ -350,3 +350,24 @@ Evidence：Mesa commit `8e87a503`，`pan_kmod.h:193-260`；字段名与顺序如
   大小（64 或 112）返回，两者前 64 字节完全一致。
 - 剩下的只是真机数值：`mmu_features` 等为 0 表示“probe 还没回答”，后端必须拒绝
   创建设备，不能当作真实值。
+
+## 18. ABI v3：可被用户态 signal 的 fence/event —— 需要决定
+
+Vulkan 的 `vkSignalSemaphore` 与 timeline semaphore 要求**宿主侧可 signal**
+的同步对象；v2 ABI 只有 `Submit` 产生、`WaitFence` 消费的 opaque fence，没有
+"signal 这个 fence" 或"创建 event"的方法。
+
+影响：MaliMetal 的 Mesa 补丁最多只能把**队列提交产生**的二进制 semaphore 映射
+过去；`vkSignalSemaphore` 与 timeline 只能返回 `VK_ERROR_FEATURE_NOT_PRESENT`。
+单队列渲染够用，compositor 的跨进程/跨队列同步不够。
+
+选项：
+
+1. **v3 增加 event 方法对**（create/destroy + signal/wait），由驱动侧计数器实现，
+   用户态不需要提交就能 signal；
+2. 把 job-slot fence 暴露成可 signal 对象（更难，fence 与已提交工作绑定）；
+3. 明确第一帧只支持队列内 semaphore，跨进程同步暂不承诺。
+
+在选定之前，MaliMetal 的 `docs/MESA_INTEGRATION.md` 与
+`docs/OPEN_QUESTIONS.md` 第 14 条记录"0006 按设计只做一半"，补丁对做不到的
+部分直接拒绝。
