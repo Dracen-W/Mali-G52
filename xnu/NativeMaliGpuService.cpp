@@ -403,7 +403,7 @@ bool NativeMaliGpuService::start(IOService *provider)
     if(native_gop_text) {
         uint16_t pmic_id = 0;
         char pmicLine[32];
-        const IOReturn pmic_status = device_.power().readPmicId(&pmic_id);
+        const IOReturn pmic_status = device_.bringup().power().readPmicId(&pmic_id);
         snprintf(pmicLine, sizeof(pmicLine), "MALI PMIC %04x",
             pmic_status == kIOReturnSuccess ? pmic_id : 0xFFFFu);
         native_gop_text(29, pmicLine);
