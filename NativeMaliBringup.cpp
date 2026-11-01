@@ -3,6 +3,15 @@
  * The citations for both are in NativeMaliBringup.h. */
 #include "NativeMaliBringup.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
+namespace {
+void stageMark(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+} // namespace
+
 IOReturn NativeMaliBringup::prepare(const NativeMaliBringupBlocks &blocks)
 {
     if(!blocks.gpu)return kIOReturnBadArgument;
@@ -48,18 +57,22 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
         state->powerStages[stage] = observation;
     };
 
+    stageMark(9, "M2V");
     result = power_.setFixedVoltage();
     capture(0, result);
     if(result != kIOReturnSuccess)return result;
 
+    stageMark(10, "M2C");
     result = power_.selectMfgClockSource();
     capture(1, result);
     if(result != kIOReturnSuccess)return result;
 
+    stageMark(11, "M2D");
     result = power_.powerOnDomains();
     capture(2, result);
     if(result != kIOReturnSuccess)return result;
 
+    stageMark(12, "M2G");
     result = power_.enableMfgClockGate();
     if(result != kIOReturnSuccess) {
         power_.powerDownDomains();
