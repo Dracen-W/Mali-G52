@@ -406,6 +406,8 @@ bool NativeMaliGpuService::start(IOService *provider)
             state.power.vsram.microvolts);
         native_gop_text(21, status == kIOReturnSuccess ? "MALI OK" : "MALI PROBE");
         native_gop_text(22, trace);
+        snprintf(trace, sizeof(trace), "MALI RC %08x", status);
+        native_gop_text(24, trace);
     }
     if(status != kIOReturnSuccess) {
         if(status == kIOReturnUnsupported)
