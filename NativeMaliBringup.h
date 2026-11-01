@@ -84,8 +84,16 @@ struct NativeMaliBringupBlocks {
 /* What the two read-only probes saw. Filled for as far as the sequence got, so
  * a failure still leaves the numbers the caller needs to log. */
 struct NativeMaliBringupState {
+    static constexpr uint32_t PowerStageCount = 4;
+
     NativeMaliPowerObservation power;
     NativeMaliGpuObservation gpu;
+    /* M2 is voltage -> clock -> domains -> gate. Each entry is the platform
+     * probe taken immediately after that step, so a failure identifies the
+     * exact step instead of collapsing the whole sequence into one result. */
+    NativeMaliPowerObservation powerStages[PowerStageCount];
+    uint32_t powerStagesDone = 0;
+    IOReturn powerStageStatus = kIOReturnSuccess;
 };
 
 class NativeMaliBringup final {

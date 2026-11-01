@@ -35,18 +35,39 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     if(result != kIOReturnSuccess)return result;
     if(state)state->power = powerObservation;
 
-    /* M2. bringUp() already rolls its own partial writes back. */
-    result = power_.bringUp();
-    if(result != kIOReturnSuccess)return result;
-    powered_ = true;
+    /* M2, one step at a time, probing after each step. bringUp() bundles the
+     * same order, but this keeps the intermediate values visible on the phone
+     * and leaves the failing step in `powerStageStatus`. */
+    auto capture = [this, state](uint32_t stage, IOReturn stageStatus) {
+        if(!state)return;
+        state->powerStagesDone = stage + 1;
+        state->powerStageStatus = stageStatus;
+        NativeMaliPowerObservation observation{};
+        if(power_.probe(&observation) == kIOReturnSuccess)
+            state->power = observation;
+        state->powerStages[stage] = observation;
+    };
 
-    /* Re-read after M2 so the glue displays the post-power state, not the
-     * snapshot taken before the voltage, clocks and domains were enabled. */
-    if(state) {
-        NativeMaliPowerObservation after;
-        (void)power_.probe(&after);
-        state->power = after;
+    result = power_.setFixedVoltage();
+    capture(0, result);
+    if(result != kIOReturnSuccess)return result;
+
+    result = power_.selectMfgClockSource();
+    capture(1, result);
+    if(result != kIOReturnSuccess)return result;
+
+    result = power_.powerOnDomains();
+    capture(2, result);
+    if(result != kIOReturnSuccess)return result;
+
+    result = power_.enableMfgClockGate();
+    if(result != kIOReturnSuccess) {
+        power_.powerDownDomains();
+        capture(3, result);
+        return result;
     }
+    capture(3, result);
+    powered_ = true;
 
     /* M3: identify before allocating an address space, the order
      * panfrost_device_init() uses (gpu_init at :312, mmu_init at :316). */

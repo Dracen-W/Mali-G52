@@ -446,6 +446,25 @@ bool NativeMaliGpuService::start(IOService *provider)
             state.power.topMfgClockConfig, state.power.topClockUpdate,
             state.power.mfgClockGateStatus);
         native_gop_text(27, trace);
+        static const char *const stageNames[] = {"V", "C", "D", "G"};
+        for(uint32_t stage = 0; stage < state.powerStagesDone &&
+            stage < NativeMaliBringupState::PowerStageCount; ++stage) {
+            const NativeMaliPowerObservation &observation =
+                state.powerStages[stage];
+            snprintf(trace, sizeof(trace),
+                "M2%s S%08x P%08x C%08x G%08x V%u/%u",
+                stageNames[stage], observation.spmStatus,
+                observation.infraProtectEnable,
+                observation.topMfgClockConfig,
+                observation.mfgClockGateStatus,
+                observation.vgpu.microvolts, observation.vsram.microvolts);
+            native_gop_text(32 + stage, trace);
+        }
+        if(state.powerStageStatus != kIOReturnSuccess) {
+            snprintf(trace, sizeof(trace), "M2 ERR %08x",
+                state.powerStageStatus);
+            native_gop_text(36, trace);
+        }
     }
     if(status != kIOReturnSuccess) {
         if(status == kIOReturnUnsupported)
