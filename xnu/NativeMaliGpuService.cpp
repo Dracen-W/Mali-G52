@@ -408,6 +408,16 @@ bool NativeMaliGpuService::start(IOService *provider)
         native_gop_text(22, trace);
         snprintf(trace, sizeof(trace), "MALI RC %08x", status);
         native_gop_text(24, trace);
+        snprintf(trace, sizeof(trace), "MALI SPM %08x/%08x",
+            state.power.spmStatus, state.power.spmStatus2);
+        native_gop_text(25, trace);
+        snprintf(trace, sizeof(trace), "MALI PROT %08x/%08x",
+            state.power.infraProtectEnable, state.power.infraProtectStatus1);
+        native_gop_text(26, trace);
+        snprintf(trace, sizeof(trace), "MALI CLK %08x/%08x GATE %08x",
+            state.power.topMfgClockConfig, state.power.topClockUpdate,
+            state.power.mfgClockGateStatus);
+        native_gop_text(27, trace);
     }
     if(status != kIOReturnSuccess) {
         if(status == kIOReturnUnsupported)
