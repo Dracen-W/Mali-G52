@@ -47,39 +47,26 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     /* M2, one step at a time, probing after each step. bringUp() bundles the
      * same order, but this keeps the intermediate values visible on the phone
      * and leaves the failing step in `powerStageStatus`. */
-    auto capture = [this, state](uint32_t stage, IOReturn stageStatus) {
-        if(!state)return;
-        state->powerStagesDone = stage + 1;
-        state->powerStageStatus = stageStatus;
-        NativeMaliPowerObservation observation{};
-        if(power_.probe(&observation) == kIOReturnSuccess)
-            state->power = observation;
-        state->powerStages[stage] = observation;
-    };
-
-    stageMark(9, "M2V");
-    result = power_.setFixedVoltage();
-    capture(0, result);
-    if(result != kIOReturnSuccess)return result;
+    /* The MT6768 preloader leaves VGPU and VSRAM_GPU enabled. The validated
+     * redwood_mali bring-up does not touch the PMIC, so do not issue the M2
+     * pwrap voltage reads or writes here. */
+    stageMark(9, "M2V preloader");
+    if(state)state->powerStagesDone = 0;
 
     stageMark(10, "M2C");
     result = power_.selectMfgClockSource();
-    capture(1, result);
     if(result != kIOReturnSuccess)return result;
 
     stageMark(11, "M2D");
     result = power_.powerOnDomains();
-    capture(2, result);
     if(result != kIOReturnSuccess)return result;
 
     stageMark(12, "M2G");
     result = power_.enableMfgClockGate();
     if(result != kIOReturnSuccess) {
         power_.powerDownDomains();
-        capture(3, result);
         return result;
     }
-    capture(3, result);
     powered_ = true;
 
     /* M3: identify before allocating an address space, the order

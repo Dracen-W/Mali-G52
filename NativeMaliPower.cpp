@@ -390,7 +390,7 @@ IOReturn NativeMaliPower::selectMfgClockSource()
     if(!kWriteAuthorized)return kIOReturnUnsupported;
 
     const uint32_t field = TopMfgSelectMask << TopMfgSelectShift;
-    const uint32_t select = TopMfgSelectClk26m << TopMfgSelectShift;
+    const uint32_t select = TopMfgSelectSyspllD3 << TopMfgSelectShift;
 
     /* clk-mux.c:82-100 (enable: clear the mux gate) and 205-228 (set parent:
      * mask to CLR, value to SET, then pulse the update bit). */
@@ -409,7 +409,7 @@ IOReturn NativeMaliPower::selectMfgClockSource()
     uint32_t value = 0;
     result = readWord(topckgen_, TopMfgClockConfig, &value);
     if(result != kIOReturnSuccess)return result;
-    if(((value >> TopMfgSelectShift) & TopMfgSelectMask) != TopMfgSelectClk26m)
+    if(((value >> TopMfgSelectShift) & TopMfgSelectMask) != TopMfgSelectSyspllD3)
         return kIOReturnIOError;
     if(value & TopMfgMuxGate)return kIOReturnIOError;
     return kIOReturnSuccess;

@@ -152,6 +152,7 @@ public:
         TopMfgSelectShift = 0,
         TopMfgSelectMask = 0x3,
         TopMfgSelectClk26m = 0,
+        TopMfgSelectSyspllD3 = 2,
         TopMfgMuxGate = 1u << 7,
         TopMfgUpdate = 1u << 4
     };
