@@ -53,10 +53,11 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     stageMark(9, "M2V preloader");
     if(state)state->powerStagesDone = 0;
 
-    stageMark(10, "M2C");
-    stageMark(13, "CK clock");
-    result = power_.selectMfgClockSource();
-    if(result != kIOReturnSuccess)return result;
+    stageMark(10, "M2C preloader");
+    stageMark(13, "CK clock preloader");
+    /* TEMPORARY: the MT6768 preloader leaves mfg_sel on syspll_d3. Writing
+     * CLK_CFG_1_SET blocks this board's topckgen, so rely on the preloader
+     * value for this bring-up attempt. Remove after the GPU clock is verified. */
 
     stageMark(11, "M2D");
     stageMark(13, "CK domains");
