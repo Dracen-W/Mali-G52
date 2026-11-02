@@ -54,18 +54,18 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     if(state)state->powerStagesDone = 0;
 
     stageMark(10, "M2C preloader");
-    stageMark(13, "CK clock preloader");
+    stageMark(14, "CK clock preloader");
     /* TEMPORARY: the MT6768 preloader leaves mfg_sel on syspll_d3. Writing
      * CLK_CFG_1_SET blocks this board's topckgen, so rely on the preloader
      * value for this bring-up attempt. Remove after the GPU clock is verified. */
 
     stageMark(11, "M2D");
-    stageMark(13, "CK domains");
+    stageMark(15, "CK domains");
     result = power_.powerOnDomains();
     if(result != kIOReturnSuccess)return result;
 
     stageMark(12, "M2G");
-    stageMark(13, "CK gate");
+    stageMark(16, "CK gate");
     result = power_.enableMfgClockGate();
     if(result != kIOReturnSuccess) {
         power_.powerDownDomains();
@@ -75,7 +75,7 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
 
     /* M3: identify before allocating an address space, the order
      * panfrost_device_init() uses (gpu_init at :312, mmu_init at :316). */
-    stageMark(13, "CK GPU ID");
+    stageMark(17, "CK GPU ID");
     result = gpu_.probe(&observation_);
     if(state)state->gpu = observation_;
     if(result != kIOReturnSuccess) {
@@ -86,13 +86,13 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     /* panfrost_device_reset(): reset, then power on (panfrost_device.c:514-516).
      * softReset() refuses without a successful probe, and powerOn() refuses
      * without a successful reset, so this order is also enforced downwards. */
-    stageMark(13, "CK GPU reset");
+    stageMark(18, "CK GPU reset");
     result = gpu_.softReset();
     if(result != kIOReturnSuccess) {
         quiesce(teardownError);
         return result;
     }
-    stageMark(13, "CK GPU cores");
+    stageMark(19, "CK GPU cores");
     result = gpu_.powerOn();
     if(result != kIOReturnSuccess) {
         /* powerOn() has already quiesced L2/shader/tiler itself. */
@@ -104,7 +104,7 @@ IOReturn NativeMaliBringup::start(NativeMaliBringupState *state,
     /* M4: panfrost_mmu_reset() after power-on (panfrost_device.c:517). The
      * present mask comes from the probe and is a hardware fact, so it is
      * recorded before the allocation bitmap is cleared. */
-    stageMark(13, "CK MMU");
+    stageMark(20, "CK MMU");
     result = mmu_.setPresent(observation_.asPresent);
     if(result != kIOReturnSuccess) {
         quiesce(teardownError);

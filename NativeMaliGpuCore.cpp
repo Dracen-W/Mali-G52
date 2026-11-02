@@ -4,6 +4,13 @@
 #include "NativeMaliGpuCore.h"
 #include "NativeMaliRegs.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
+static void resetMark(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+
 namespace {
 
 /* panfrost_gpu_power_on/off() poll these; the values are the source's own
@@ -261,13 +268,16 @@ IOReturn NativeMaliGpuCore::softReset(uint64_t timeout_us)
     resetDone_ = false;
 
     /* panfrost_gpu_soft_reset(), panfrost_gpu.c:62-108. */
+    resetMark(5, "R1 mask+clear");
     result = writeWord(gpu_, GPU_INT_MASK, 0);
     if(result != kIOReturnSuccess)return result;
     result = writeWord(gpu_, GPU_INT_CLEAR, GPU_IRQ_RESET_COMPLETED);
     if(result != kIOReturnSuccess)return result;
+    resetMark(6, "R2 cmd");
     result = writeWord(gpu_, GPU_CMD, GPU_CMD_SOFT_RESET);
     if(result != kIOReturnSuccess)return result;
 
+    resetMark(7, "R3 poll");
     result = pollRawStatus(gpu_, GPU_IRQ_RESET_COMPLETED, timeout_us,
         SoftResetPollUs);
     if(result == kIOReturnTimeout) {
@@ -276,11 +286,13 @@ IOReturn NativeMaliGpuCore::softReset(uint64_t timeout_us)
          * the safest state for a caller that must stop. */
         result = writeWord(gpu_, GPU_CMD, GPU_CMD_HARD_RESET);
         if(result != kIOReturnSuccess)return result;
+        resetMark(8, "R4 hard reset");
         result = pollRawStatus(gpu_, GPU_IRQ_RESET_COMPLETED, timeout_us,
             HardResetPollUs);
     }
     if(result != kIOReturnSuccess)return result;
 
+    resetMark(8, "R5 clear+mask");
     result = writeWord(gpu_, GPU_INT_CLEAR, GPU_IRQ_MASK_ALL);
     if(result != kIOReturnSuccess)return result;
     result = writeWord(gpu_, GPU_INT_MASK, GPU_IRQ_MASK_ERROR |
