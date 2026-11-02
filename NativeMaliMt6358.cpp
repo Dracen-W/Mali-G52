@@ -79,6 +79,7 @@ IOReturn NativeMaliMt6358::setRailFrom(uint16_t enable_offset,
     uint16_t selector = 0;
     if(!encode(microvolts, &selector))return kIOReturnBadArgument;
     if(before)*before = previous;
+    IOReturn result = kIOReturnSuccess;
 
     if((previous.voselWord & VoselMask) != selector) {
         const uint16_t next = static_cast<uint16_t>(
