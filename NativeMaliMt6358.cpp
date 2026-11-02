@@ -71,16 +71,13 @@ IOReturn NativeMaliMt6358::restoreRail(uint16_t enable_offset,
     return first;
 }
 
-IOReturn NativeMaliMt6358::setRail(uint16_t enable_offset,
-    uint16_t vosel_offset, uint32_t microvolts, RailState *before)
+IOReturn NativeMaliMt6358::setRailFrom(uint16_t enable_offset,
+    uint16_t vosel_offset, uint32_t microvolts, const RailState &previous,
+    RailState *before)
 {
     if(!pwrap_)return kIOReturnNotReady;
     uint16_t selector = 0;
     if(!encode(microvolts, &selector))return kIOReturnBadArgument;
-
-    RailState previous;
-    IOReturn result = readRail(enable_offset, vosel_offset, &previous);
-    if(result != kIOReturnSuccess)return result;
     if(before)*before = previous;
 
     if((previous.voselWord & VoselMask) != selector) {
@@ -137,6 +134,16 @@ IOReturn NativeMaliMt6358::setVgpu(uint32_t microvolts, RailState *before)
     return setRail(VgpuEnable, VgpuVosel, microvolts, before);
 }
 
+IOReturn NativeMaliMt6358::setRail(uint16_t enable_offset,
+    uint16_t vosel_offset, uint32_t microvolts, RailState *before)
+{
+    if(!pwrap_)return kIOReturnNotReady;
+    RailState previous;
+    IOReturn result = readRail(enable_offset, vosel_offset, &previous);
+    if(result != kIOReturnSuccess)return result;
+    return setRailFrom(enable_offset, vosel_offset, microvolts, previous, before);
+}
+
 IOReturn NativeMaliMt6358::setVsram(uint32_t microvolts, RailState *before)
 {
     return setRail(VsramEnable, VsramVosel, microvolts, before);
@@ -166,5 +173,23 @@ IOReturn NativeMaliMt6358::setFixed()
         return result;
     }
     voltageMark(13, "VOK");
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliMt6358::setFixed(const RailState &vsram_before,
+    const RailState &vgpu_before)
+{
+    if(!pwrap_)return kIOReturnNotReady;
+    voltageMark(20, "VFB M1 snapshot");
+    IOReturn result = setRailFrom(VsramEnable, VsramVosel,
+        FixedVsramMicrovolts, vsram_before, nullptr);
+    if(result != kIOReturnSuccess)return result;
+    result = setRailFrom(VgpuEnable, VgpuVosel,
+        FixedVgpuMicrovolts, vgpu_before, nullptr);
+    if(result != kIOReturnSuccess) {
+        restoreRail(VsramEnable, VsramVosel, vsram_before);
+        return result;
+    }
+    voltageMark(13, "VOK FALLBACK");
     return kIOReturnSuccess;
 }

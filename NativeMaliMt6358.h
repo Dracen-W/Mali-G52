@@ -105,12 +105,17 @@ public:
     /* FixedVgpuMicrovolts / FixedVsramMicrovolts, VSRAM first. If the VGPU step
      * fails the VSRAM rail is put back to its previous words. */
     IOReturn setFixed();
+    /* TEMPORARY M2 fallback: write from the M1 rail snapshot when the normal
+     * read path fails. Remove this overload once M2 completes on hardware. */
+    IOReturn setFixed(const RailState &vsram_before, const RailState &vgpu_before);
 
 private:
     IOReturn readRail(uint16_t enable_offset, uint16_t vosel_offset,
         RailState *state);
     IOReturn setRail(uint16_t enable_offset, uint16_t vosel_offset,
         uint32_t microvolts, RailState *before);
+    IOReturn setRailFrom(uint16_t enable_offset, uint16_t vosel_offset,
+        uint32_t microvolts, const RailState &previous, RailState *before);
     IOReturn restoreRail(uint16_t enable_offset, uint16_t vosel_offset,
         const RailState &state);
 

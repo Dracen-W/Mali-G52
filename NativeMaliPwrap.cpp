@@ -2,6 +2,13 @@
 /* WACS2 transport; the protocol and its citations are in NativeMaliPwrap.h. */
 #include "NativeMaliPwrap.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
+static void pwrapMark(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+
 IOReturn NativeMaliPwrap::prepare(NativeMaliRegisterTarget *target)
 {
     if(!target)return kIOReturnBadArgument;
@@ -57,22 +64,28 @@ IOReturn NativeMaliPwrap::read(uint16_t address, uint16_t *value,
     if(!target_)return kIOReturnNotReady;
     if(!timeout_us || !DefaultPollUs)return kIOReturnBadArgument;
 
+    pwrapMark(14, "P1 idle");
     IOReturn result = waitIdle(timeout_us);
     if(result != kIOReturnSuccess)return result;
 
     const uint32_t command =
         (static_cast<uint32_t>(address) >> 1) << AddressShift;
+    pwrapMark(15, "P2 command");
     result = target_->write32(Wacs2Command, command);
     if(result != kIOReturnSuccess)return result;
 
     uint32_t word = 0;
+    pwrapMark(16, "P3 vldclr");
     result = waitForFsm(FsmWaitValidClear, false, &word, timeout_us);
     if(result != kIOReturnSuccess)return result;
+    pwrapMark(17, "P4 data");
     *value = static_cast<uint16_t>(word & DataMask);
 
     /* pwrap_hal.c:494-495: reading the data is what clears the valid bit. */
+    pwrapMark(18, "P5 clear");
     result = target_->write32(Wacs2Clear, 1);
     if(result != kIOReturnSuccess)return result;
+    pwrapMark(19, "P6 idle");
     return waitIdle(timeout_us);
 }
 

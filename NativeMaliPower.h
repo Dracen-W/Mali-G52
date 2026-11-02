@@ -288,6 +288,10 @@ private:
     IOReturn powerOn(const Domain &domain, uint64_t timeout_us) const;
     IOReturn powerOff(const Domain &domain, uint64_t timeout_us) const;
 
+    /* TEMPORARY: M1 snapshot for the M2 read-failure fallback. Remove once
+     * M2 passes on hardware. */
+    NativeMaliPowerObservation lastProbe_{};
+    bool probed_ = false;
     NativeMaliRegisterTarget *spm_ = nullptr;
     NativeMaliRegisterTarget *infracfg_ = nullptr;
     NativeMaliRegisterTarget *topckgen_ = nullptr;

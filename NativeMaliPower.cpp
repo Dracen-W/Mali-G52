@@ -332,7 +332,12 @@ IOReturn NativeMaliPower::probe(NativeMaliPowerObservation *observation)
     if(result != kIOReturnSuccess)return result;
     result = pmic_.readVgpu(&observation->vgpu);
     if(result != kIOReturnSuccess)return result;
-    return pmic_.readVsram(&observation->vsram);
+    result = pmic_.readVsram(&observation->vsram);
+    if(result == kIOReturnSuccess) {
+        lastProbe_ = *observation;
+        probed_ = true;
+    }
+    return result;
 }
 
 IOReturn NativeMaliPower::gpuReadable(uint32_t *missing) const
@@ -371,7 +376,12 @@ IOReturn NativeMaliPower::setFixedVoltage()
 {
     if(!prepared())return kIOReturnNotReady;
     if(!kWriteAuthorized)return kIOReturnUnsupported;
-    return pmic_.setFixed();
+    IOReturn result = pmic_.setFixed();
+    if(result == kIOReturnSuccess)return result;
+    /* TEMPORARY: only use the M1 snapshot after the normal read path failed.
+     * Remove after M2 passes on hardware. */
+    if(probed_)return pmic_.setFixed(lastProbe_.vsram, lastProbe_.vgpu);
+    return result;
 }
 
 IOReturn NativeMaliPower::selectMfgClockSource()
