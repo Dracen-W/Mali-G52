@@ -399,25 +399,19 @@ IOReturn NativeMaliPower::selectMfgClockSource()
     const uint32_t field = TopMfgSelectMask << TopMfgSelectShift;
     const uint32_t select = TopMfgSelectSyspllD3 << TopMfgSelectShift;
 
-    /* clk-mux.c:82-100 (enable: clear the mux gate) and 205-228 (set parent:
-     * mask to CLR, value to SET, then pulse the update bit). */
-    clockMark(14, "C1 gate");
+    /* The vendor and the validated MT6768 reference clear mfg_sel and its
+     * mux gate in one write, then write the new parent. Splitting the two
+     * clears leaves the mux in a transient state and blocked C2 on hardware. */
+    clockMark(14, "C1 clear");
     IOReturn result = writeWord(topckgen_, TopMfgClockConfigClear,
-        TopMfgMuxGate);
+        field | TopMfgMuxGate);
     if(result != kIOReturnSuccess)return result;
-    clockMark(15, "C2 field");
-    result = writeWord(topckgen_, TopMfgClockConfigClear, field);
-    if(result != kIOReturnSuccess)return result;
-    clockMark(16, "C3 syspll_d3");
+    clockMark(15, "C2 set syspll_d3");
     result = writeWord(topckgen_, TopMfgClockConfigSet, select);
     if(result != kIOReturnSuccess)return result;
-    clockMark(17, "C4 update");
-    result = writeWord(topckgen_, TopClockUpdate, TopMfgUpdate);
-    if(result != kIOReturnSuccess)return result;
 
-    /* Do not verify the update bit: the vendor never reads it and it may be
-     * self-clearing. The mux field and the gate are latched and readable. */
-    clockMark(18, "C5 verify");
+    /* The mux field and the gate are latched and readable. */
+    clockMark(16, "C3 verify");
     uint32_t value = 0;
     result = readWord(topckgen_, TopMfgClockConfig, &value);
     if(result != kIOReturnSuccess)return result;
