@@ -3,6 +3,13 @@
  * NativeMaliPower.h; this file only puts them in the vendor's order. */
 #include "NativeMaliPower.h"
 
+extern "C" void native_gop_text(unsigned line, const char *text) __attribute__((weak));
+
+static void clockMark(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+
 namespace {
 
 /* Dependency order and the properties each domain needs. The vendor clock
@@ -394,18 +401,23 @@ IOReturn NativeMaliPower::selectMfgClockSource()
 
     /* clk-mux.c:82-100 (enable: clear the mux gate) and 205-228 (set parent:
      * mask to CLR, value to SET, then pulse the update bit). */
+    clockMark(14, "C1 gate");
     IOReturn result = writeWord(topckgen_, TopMfgClockConfigClear,
         TopMfgMuxGate);
     if(result != kIOReturnSuccess)return result;
+    clockMark(15, "C2 field");
     result = writeWord(topckgen_, TopMfgClockConfigClear, field);
     if(result != kIOReturnSuccess)return result;
+    clockMark(16, "C3 syspll_d3");
     result = writeWord(topckgen_, TopMfgClockConfigSet, select);
     if(result != kIOReturnSuccess)return result;
+    clockMark(17, "C4 update");
     result = writeWord(topckgen_, TopClockUpdate, TopMfgUpdate);
     if(result != kIOReturnSuccess)return result;
 
     /* Do not verify the update bit: the vendor never reads it and it may be
      * self-clearing. The mux field and the gate are latched and readable. */
+    clockMark(18, "C5 verify");
     uint32_t value = 0;
     result = readWord(topckgen_, TopMfgClockConfig, &value);
     if(result != kIOReturnSuccess)return result;
