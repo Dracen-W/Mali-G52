@@ -48,6 +48,7 @@ IOReturn NativeMaliXnuWindow::write32(uint32_t offset, uint32_t value)
     if(!base_ || (offset & 3u) || offset > bytes_ || bytes_ - offset < 4)
         return kIOReturnBadArgument;
     *reinterpret_cast<volatile uint32_t *>(base_ + offset) = value;
+    __asm__ volatile ("dsb sy" ::: "memory");
     return kIOReturnSuccess;
 }
 
