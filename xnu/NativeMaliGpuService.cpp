@@ -600,11 +600,13 @@ IOReturn NativeMaliGpuService::newUserClient(task_t owningTask, void *securityID
      * (docs/UNVERIFIED.md). */
     if(!client->attach(this)) {
         IOLog("NativeMali: client attach failed\n");
+        maliClientLine(14, "MALI ATTACH ERR");
         client->release();
         return kIOReturnNoResources;
     }
     if(!client->start(this)) {
         IOLog("NativeMali: client start failed\n");
+        maliClientLine(14, "MALI START ERR");
         client->detach(this);
         client->release();
         return kIOReturnNoResources;
@@ -612,6 +614,7 @@ IOReturn NativeMaliGpuService::newUserClient(task_t owningTask, void *securityID
     IOLockLock(lock_);
     if(!ready_) {
         IOLockUnlock(lock_);
+        maliClientLine(14, "MALI NOT RDY");
         client->terminate();
         client->release();
         return kIOReturnNotReady;
@@ -619,6 +622,9 @@ IOReturn NativeMaliGpuService::newUserClient(task_t owningTask, void *securityID
     const IOReturn status = client->mount(this);
     IOLockUnlock(lock_);
     if(status != kIOReturnSuccess) {
+        char trace[32];
+        snprintf(trace, sizeof(trace), "MALI OPEN %08x", status);
+        maliClientLine(14, trace);
         client->terminate();
         client->release();
         return status;
