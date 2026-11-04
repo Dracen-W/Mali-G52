@@ -50,6 +50,34 @@ static void maliMark(const char *text)
     if(native_gop_text)native_gop_text(23, text);
 }
 
+/* Live userland status on spare GOP text rows. The bring-up rows use 20..31
+ * and the mount/bootstrap rows use 0..13, so a user client reports through
+ * 14..19: connection, last method, its result, the method's reply and the
+ * fault counters. This is deliberately independent of IOLog: the phone has no
+ * log transport, and the panel is the only result channel. */
+static void maliClientLine(unsigned line, const char *text)
+{
+    if(native_gop_text)native_gop_text(line, text);
+}
+
+static const char *maliMethodName(uint32_t method)
+{
+    switch(method) {
+    case NativeMaliMethodQuery: return "QUERY";
+    case NativeMaliMethodGetDeviceInfo: return "INFO";
+    case NativeMaliMethodBoAlloc: return "ALLOC";
+    case NativeMaliMethodBoMap: return "MAP";
+    case NativeMaliMethodBoFree: return "FREE";
+    case NativeMaliMethodBoCpuMap: return "CPUMAP";
+    case NativeMaliMethodBoCpuUnmap: return "CPUUNMAP";
+    case NativeMaliMethodSubmit: return "SUBMIT";
+    case NativeMaliMethodWaitFence: return "WAIT";
+    case NativeMaliMethodGetStatus: return "STATUS";
+    case NativeMaliMethodReset: return "RESET";
+    default: return "?";
+    }
+}
+
 /* The Mali node and the five blocks M2 programs. The GPU window is the
  * provider's own reg; the others are separate DT nodes whose bases are fixed in
  * the vendor DTS and quoted in NativeMaliPower.h/NativeMaliPwrap.h.
@@ -480,6 +508,7 @@ bool NativeMaliGpuService::start(IOService *provider)
 
     ready_ = true;
     registerService();
+    maliClientLine(19, "MALI SVC UP");
     IOLog("NativeMali: ready, publishing\n");
     return true;
 }
@@ -594,6 +623,7 @@ IOReturn NativeMaliGpuService::newUserClient(task_t owningTask, void *securityID
         client->release();
         return status;
     }
+    maliClientLine(14, "MALI CLIENT");
     if(handler)*handler = client;
     return kIOReturnSuccess;
 }
@@ -813,6 +843,87 @@ void NativeMaliGpuClient::afterMethod(uint32_t method, const void *input,
          * and leave every still-mapped BO alone. */
         dropDeadViews();
     }
+    if(native_gop_text) {
+        char trace[96];
+        switch(method) {
+        case NativeMaliMethodQuery: {
+            const NativeMaliAbiQuery *reply =
+                static_cast<const NativeMaliAbiQuery *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI Q ABI %u IN %u OUT %u",
+                    reply->abi_version, reply->input_bits, reply->output_bits);
+                native_gop_text(16, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodGetDeviceInfo: {
+            const NativeMaliAbiDeviceInfo *reply =
+                static_cast<const NativeMaliAbiDeviceInfo *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI INFO %08x F%u T%u",
+                    reply->gpu_id, reply->flags, reply->thread_max_threads);
+                native_gop_text(16, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodBoAlloc: {
+            const NativeMaliAbiBoAllocReply *reply =
+                static_cast<const NativeMaliAbiBoAllocReply *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI BO %08x%08x",
+                    static_cast<uint32_t>(reply->handle >> 32),
+                    static_cast<uint32_t>(reply->handle));
+                native_gop_text(16, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodBoMap: {
+            const NativeMaliAbiBoMapReply *reply =
+                static_cast<const NativeMaliAbiBoMapReply *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI IOVA %08x%08x",
+                    static_cast<uint32_t>(reply->iova >> 32),
+                    static_cast<uint32_t>(reply->iova));
+                native_gop_text(16, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodBoCpuMap: {
+            const NativeMaliAbiBoCpuMapReply *reply =
+                static_cast<const NativeMaliAbiBoCpuMapReply *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI CPU T%u %u",
+                    reply->token, static_cast<uint32_t>(reply->bytes));
+                native_gop_text(16, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodSubmit: {
+            const NativeMaliAbiSubmitReply *reply =
+                static_cast<const NativeMaliAbiSubmitReply *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI FENCE %08x%08x",
+                    static_cast<uint32_t>(reply->fence >> 32),
+                    static_cast<uint32_t>(reply->fence));
+                native_gop_text(17, trace);
+            }
+            break;
+        }
+        case NativeMaliMethodGetStatus: {
+            const NativeMaliAbiStatus *reply =
+                static_cast<const NativeMaliAbiStatus *>(output);
+            if(reply) {
+                snprintf(trace, sizeof(trace), "MALI F%u R%u",
+                    static_cast<uint32_t>(reply->faults),
+                    static_cast<uint32_t>(reply->resets));
+                native_gop_text(18, trace);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
 }
 
 namespace {
@@ -863,6 +974,18 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
     if(status == kIOReturnSuccess)
         client->afterMethod(arguments->selector, arguments->structureInput,
             arguments->structureOutput);
+    if(native_gop_text) {
+        char trace[64];
+        snprintf(trace, sizeof(trace), "MALI M%u %s %s",
+            arguments->selector, maliMethodName(arguments->selector),
+            status == kIOReturnSuccess ? "OK" : "ERR");
+        native_gop_text(15, trace);
+        if(status != kIOReturnSuccess) {
+            snprintf(trace, sizeof(trace), "MALI M%u RC %08x",
+                arguments->selector, status);
+            native_gop_text(16, trace);
+        }
+    }
     IOLockUnlock(service->sessionLock());
     return status;
 }
