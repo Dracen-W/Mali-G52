@@ -26,7 +26,7 @@ Redmi/merlin_global/merlin:12/SP1A.210812.016/V13.0.2.0.SJOMIXM:user/release-key
 替换 `/vendor/lib{,64}/egl/libGLES_mali.so` 与 `hw/vulkan.mali.so`（模块副本与
 vendor 副本 sha256 一致，替换生效）。
 
-## 2. GPU：product 0x7002（g52），revision r1p0
+## 2. GPU：product 0x7402（g52 r1），revision r1p0
 
 `grab_out/mali_dmesg.txt` 原文：
 
@@ -39,10 +39,14 @@ vendor 副本 sha256 一致，替换生效）。
 
 按 panfrost 的拆法（`NativeMaliGpu.h` 里记的 `panfrost_gpu.c` 规则）：
 
-- `LUT 00070200` → 架构 7、product `0x02`，即 **product id `0x7002`**，正是
-  `gpu_models[]` 里的 `g52`。所以 `GPU_ID` 应是 **`0x70021000`**：
-  product `0x7002`，revision `0x1000` → major 1、minor 0、status 0，与 `r1p0 status 0` 一致。
-- `tests/test_gpu.cpp` 把这个值作为真机黄金用例。
+- `GPU identified as 0x2 arch 7.4.0 r1p0` 对应的完整 **`GPU_ID` 是
+  `0x74021000`**：product `0x7402`、revision `0x1000` → major 1、minor 0、status 0，
+  与 `r1p0 status 0` 一致。
+- `0x7402` 是 **G52 r1**；panfrost 的 `panfrost_model_cmp()` 会把带高位标记的
+  product 与 `0xf00f` 掩码后比较，`0x7402 & 0xf00f == 0x7002`，所以
+  `gpu_models[]` 里的 `g52` 条目仍然匹配。**不要把这个掩码值当成完整 GPU_ID。**
+- `tests/test_gpu.cpp` 里旧的 `0x70021000` 黄金值是错的；真机值应为
+  `0x74021000`（`product` 记录为 `0x7402`，`matched` 为 `0x7002`）。
 - 这台机器是 **Bifrost v7（不是 Valhall）**，也印证了包里那份 mt6873 的 Valhall 驱动
   不能当寄存器参考的结论。
 
