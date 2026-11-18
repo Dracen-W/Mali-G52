@@ -82,7 +82,7 @@ enum : uint32_t {
 /* The 1 + up-to-4 tables of one address space, plus slack for the tests'
  * scattered mappings. A caller that walks off this limit gets an error, never a
  * silent truncation. */
-enum : size_t { NativeMaliVmMaxTables = 64 };
+enum : size_t { NativeMaliVmMaxTables = 512 };
 
 /* Permissions as the encoder consumes them. Read and write are the [7:6] pair;
  * Cached selects attribute index 1, Mmio index 2; NoExec sets XN. */

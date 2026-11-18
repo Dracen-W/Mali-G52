@@ -50,7 +50,7 @@
 
 /* Live objects per client. The table is fixed storage; alloc() reports
  * kIOReturnNoResources past it rather than growing. */
-enum : size_t { NativeMaliBoTableCapacity = 64 };
+enum : size_t { NativeMaliBoTableCapacity = 512 };
 
 class NativeMaliBoTable final {
     struct Slot {

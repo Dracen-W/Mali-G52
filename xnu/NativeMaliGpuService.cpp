@@ -507,6 +507,17 @@ bool NativeMaliGpuService::start(IOService *provider)
         IOLog("NativeMali: bring-up rollback reported 0x%x\n", teardown);
 
     ready_ = true;
+    setProperty("MetalPluginName", "NativeMaliMetal");
+    setProperty("MetalPluginClassName", "NativeMaliMetalDevice");
+    setProperty("NativeSandboxGrantProcess", "*");
+    if(OSDictionary *compat = OSDictionary::withCapacity(1)) {
+        if(OSString *cls = OSString::withCString("IOAcceleratorES")) {
+            compat->setObject("IOClass", cls);
+            cls->release();
+        }
+        setProperty("IOCompatibilityProperties", compat);
+        compat->release();
+    }
     registerService();
     maliClientLine(19, "MALI SVC UP");
     IOLog("NativeMali: ready, publishing\n");
@@ -791,7 +802,7 @@ IOReturn NativeMaliGpuClient::clientMemoryForType(UInt32 type,
     if(view && view->descriptor && view->token == type) {
         view->descriptor->retain();
         *memory = view->descriptor;
-        *options = kIOMapAnywhere;
+        *options = kIOMapAnywhere | kIOMapWriteCombineCache;
         status = kIOReturnSuccess;
     } else if(view) {
         NativeMaliMemory *backing = session->core.memoryForToken(type);
@@ -801,7 +812,7 @@ IOReturn NativeMaliGpuClient::clientMemoryForType(UInt32 type,
             view->token = type;
             view->descriptor = descriptor;   /* already retained by the source */
             *memory = descriptor;
-            *options = kIOMapAnywhere;
+            *options = kIOMapAnywhere | kIOMapWriteCombineCache;
             status = kIOReturnSuccess;
         } else {
             status = kIOReturnBadArgument;

@@ -156,10 +156,17 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
     /* UNVERIFIED(XNU): physically contiguous is a deliberate trade (the pure
      * layer accepts at most 64 spans); whether a given size can be allocated
      * this way on the phone is unknown (docs/UNVERIFIED.md). */
-    IOBufferMemoryDescriptor *descriptor =
-        IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+    IOBufferMemoryDescriptor *descriptor = nullptr;
+    if(bytes <= 65536) {
+        descriptor = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
             bufferOptions(true), static_cast<vm_size_t>(bytes),
             (limit_ - 1) & ~UINT64_C(4095));
+    }
+    if(!descriptor) {
+        descriptor = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+            bufferOptions(false), static_cast<vm_size_t>(bytes),
+            (limit_ - 1) & ~UINT64_C(4095));
+    }
     if(!descriptor)return kIOReturnNoMemory;
     IOReturn status = descriptor->prepare();
     if(status != kIOReturnSuccess) {
