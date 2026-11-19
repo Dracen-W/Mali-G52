@@ -58,9 +58,9 @@ struct NativeMaliMemorySpan {
 };
 
 /* How many spans one buffer may have. A caller that walks off the limit gets
- * kIOReturnNoResources, never a silent truncation. 64 spans of the smallest
- * useful mapping cover a 1 MiB buffer at 16 KiB pages. */
-enum : size_t { NativeMaliMemoryMaxSpans = 1024 };
+ * kIOReturnNoResources, never a silent truncation. 2048 spans of 16 KiB XNU
+ * pages cover a 32 MiB completely scattered buffer. */
+enum : size_t { NativeMaliMemoryMaxSpans = 2048 };
 
 /* Buffer storage. alloc() must return page-aligned memory; the implementation
  * keeps the CPU pointer, the span list and the count valid until release().

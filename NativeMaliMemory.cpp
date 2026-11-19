@@ -35,11 +35,16 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
      * silently skipping the clean/invalidate the hardware needs. */
     if(!cpuCoherent && !maintainer)return kIOReturnBadArgument;
 
-    NativeMaliMemorySpan spans[NativeMaliMemoryMaxSpans]{};
+    /* Write directly into span_ (heap-owned inside Session) to avoid putting a
+     * multi-kilobyte span array on the 16 KiB XNU kernel stack. */
+    memset(span_, 0, sizeof(span_));
     void *cpu = nullptr;
     size_t count = 0;
-    IOReturn result = source->alloc(bytes, &cpu, spans, &count);
-    if(result != kIOReturnSuccess)return result;
+    IOReturn result = source->alloc(bytes, &cpu, span_, &count);
+    if(result != kIOReturnSuccess) {
+        memset(span_, 0, sizeof(span_));
+        return result;
+    }
 
     /* The span list must describe the buffer exactly: page-aligned runs, in
      * offset order, with no gap and no overlap. Anything else is a backend bug
@@ -49,7 +54,7 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     if(!cpu || count == 0 || count > NativeMaliMemoryMaxSpans)bad = kIOReturnBadArgument;
     uint64_t expected = 0;
     for(size_t i = 0; bad == kIOReturnSuccess && i < count; ++i) {
-        const NativeMaliMemorySpan &span = spans[i];
+        const NativeMaliMemorySpan &span = span_[i];
         if(!span.bytes || span.offset != expected ||
             (span.offset & (NativeMaliVmGranule - 1)) ||
             (span.bytes & (NativeMaliVmGranule - 1)) ||
@@ -62,11 +67,10 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     }
     if(bad == kIOReturnSuccess && expected != bytes)bad = kIOReturnBadArgument;
     if(bad != kIOReturnSuccess) {
-        source->release(cpu, spans, count);
+        source->release(cpu, span_, count);
+        memset(span_, 0, sizeof(span_));
         return bad;
     }
-
-    memcpy(span_, spans, count * sizeof(spans[0]));
     spans_ = count;
     cpu_ = cpu;
     bytes_ = bytes;
