@@ -814,8 +814,12 @@ IOReturn NativeMaliGpuClient::clientMemoryForType(UInt32 type,
         IOMemoryDescriptor *descriptor =
             backing ? session->buffers.descriptor(backing->cpu()) : nullptr;
         if(descriptor) {
+            /* buffers.descriptor() returned one retained ref for *memory (which
+             * IOKit consumes and releases). Retain a second ref for view_ so
+             * dropDeadViews()/dropViews() does not double-release it. */
+            descriptor->retain();
             view->token = type;
-            view->descriptor = descriptor;   /* already retained by the source */
+            view->descriptor = descriptor;
             *memory = descriptor;
             *options = kIOMapAnywhere | kIOMapWriteCombineCache;
             status = kIOReturnSuccess;
