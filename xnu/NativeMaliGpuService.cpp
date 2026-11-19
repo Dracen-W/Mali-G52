@@ -138,7 +138,12 @@ IOReturn mapFixedWindow(uint64_t base, uint64_t bytes,
 
 class NativeMaliGpuClient;
 
-class NativeMaliGpuService final : public IOService {
+class IOAcceleratorES : public IOService {
+    OSDeclareDefaultStructors(IOAcceleratorES)
+};
+OSDefineMetaClassAndStructors(IOAcceleratorES, IOService)
+
+class NativeMaliGpuService final : public IOAcceleratorES {
     OSDeclareDefaultStructors(NativeMaliGpuService)
 
     NativeMaliService device_;
@@ -181,7 +186,7 @@ public:
     bool attachSession(NativeMaliGpuClient *client);
     void detachSession(NativeMaliGpuClient *client);
 };
-OSDefineMetaClassAndStructors(NativeMaliGpuService, IOService)
+OSDefineMetaClassAndStructors(NativeMaliGpuService, IOAcceleratorES)
 
 /* One connection. It owns the pure client and everything the client needs:
  * its page tables, its buffers and its cache maintainer. A teardown that fails
