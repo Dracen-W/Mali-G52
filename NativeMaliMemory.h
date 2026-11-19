@@ -44,6 +44,7 @@
 #include "NativeMaliCache.h"
 #include "NativeMaliMmu.h"
 #include "NativeMaliVm.h"
+#include <IOKit/IOLib.h>
 #include <IOKit/IOTypes.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -82,7 +83,8 @@ public:
 class NativeMaliMemory final {
     NativeMaliMemorySource *source_ = nullptr;
     NativeMaliCacheMaintainer *maintainer_ = nullptr;
-    NativeMaliMemorySpan span_[NativeMaliMemoryMaxSpans]{};
+    NativeMaliMemorySpan *span_ = nullptr;
+    size_t spanCap_ = 0;
     size_t spans_ = 0;
     void *cpu_ = nullptr;
     size_t bytes_ = 0;

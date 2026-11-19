@@ -35,14 +35,16 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
      * silently skipping the clean/invalidate the hardware needs. */
     if(!cpuCoherent && !maintainer)return kIOReturnBadArgument;
 
-    /* Write directly into span_ (heap-owned inside Session) to avoid putting a
-     * multi-kilobyte span array on the 16 KiB XNU kernel stack. */
-    memset(span_, 0, sizeof(span_));
+    /* Allocate span scratch dynamically on the heap: neither on the 16 KiB XNU
+     * kernel stack nor inline per BO slot (512 * 65536 * 24 B = 768 MiB!). */
+    NativeMaliMemorySpan *spans = IONewData(NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+    if(!spans)return kIOReturnNoMemory;
+    memset(spans, 0, sizeof(NativeMaliMemorySpan) * NativeMaliMemoryMaxSpans);
     void *cpu = nullptr;
     size_t count = 0;
-    IOReturn result = source->alloc(bytes, &cpu, span_, &count);
+    IOReturn result = source->alloc(bytes, &cpu, spans, &count);
     if(result != kIOReturnSuccess) {
-        memset(span_, 0, sizeof(span_));
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
         return result;
     }
 
@@ -54,7 +56,7 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     if(!cpu || count == 0 || count > NativeMaliMemoryMaxSpans)bad = kIOReturnBadArgument;
     uint64_t expected = 0;
     for(size_t i = 0; bad == kIOReturnSuccess && i < count; ++i) {
-        const NativeMaliMemorySpan &span = span_[i];
+        const NativeMaliMemorySpan &span = spans[i];
         if(!span.bytes || span.offset != expected ||
             (span.offset & (NativeMaliVmGranule - 1)) ||
             (span.bytes & (NativeMaliVmGranule - 1)) ||
@@ -67,9 +69,21 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     }
     if(bad == kIOReturnSuccess && expected != bytes)bad = kIOReturnBadArgument;
     if(bad != kIOReturnSuccess) {
-        source->release(cpu, span_, count);
-        memset(span_, 0, sizeof(span_));
+        source->release(cpu, spans, count);
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
         return bad;
+    }
+
+    /* Shrink storage to the exact span count so small BOs only hold a few entries. */
+    NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
+    if(compact) {
+        memcpy(compact, spans, count * sizeof(spans[0]));
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        span_ = compact;
+        spanCap_ = count;
+    } else {
+        span_ = spans;
+        spanCap_ = NativeMaliMemoryMaxSpans;
     }
     spans_ = count;
     cpu_ = cpu;
@@ -84,7 +98,11 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
 void NativeMaliMemory::reset()
 {
     if(prepared_ && source_)source_->release(cpu_, span_, spans_);
-    memset(span_, 0, sizeof(span_));
+    if(span_) {
+        IODeleteData(span_, NativeMaliMemorySpan, spanCap_);
+        span_ = nullptr;
+    }
+    spanCap_ = 0;
     spans_ = 0;
     source_ = nullptr;
     maintainer_ = nullptr;
