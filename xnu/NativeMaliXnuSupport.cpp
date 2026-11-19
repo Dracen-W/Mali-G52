@@ -181,24 +181,27 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
         descriptor->getLength() != bytes)
         goto failed;
 
-    for(size_t offset = 0; offset < bytes; offset += NativeMaliVmGranule) {
+    for(size_t offset = 0; offset < bytes; ) {
         IOByteCount length = 0;
         const addr64_t physical =
             descriptor->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
+        size_t chunk = static_cast<size_t>(length) & ~(NativeMaliVmGranule - 1);
+        if(chunk > bytes - offset)chunk = bytes - offset;
         if(!physical || (physical & (NativeMaliVmGranule - 1)) ||
-            length < NativeMaliVmGranule || physical >= limit_ ||
-            NativeMaliVmGranule > limit_ - physical)
+            chunk < NativeMaliVmGranule || physical >= limit_ ||
+            chunk > limit_ - physical)
             goto failed;
         if(spans_used &&
             physical == spans[spans_used - 1].physical + spans[spans_used - 1].bytes) {
-            spans[spans_used - 1].bytes += NativeMaliVmGranule;
+            spans[spans_used - 1].bytes += chunk;
         } else {
             if(spans_used == NativeMaliMemoryMaxSpans)goto failed;
             spans[spans_used].offset = offset;
             spans[spans_used].physical = physical;
-            spans[spans_used].bytes = NativeMaliVmGranule;
+            spans[spans_used].bytes = chunk;
             ++spans_used;
         }
+        offset += chunk;
     }
 
     memset(mapping, 0, bytes);
