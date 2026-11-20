@@ -25,10 +25,10 @@ NativeMaliMemory::~NativeMaliMemory()
 
 namespace {
 
-IOReturn validateSpans(void *cpu, const NativeMaliMemorySpan *spans,
-    size_t count, size_t bytes)
+IOReturn validateSpans(void *cpu, bool requireCpu,
+    const NativeMaliMemorySpan *spans, size_t count, size_t bytes)
 {
-    if(!cpu || count == 0 || count > NativeMaliMemoryMaxSpans)
+    if((requireCpu && !cpu) || count == 0 || count > NativeMaliMemoryMaxSpans)
         return kIOReturnBadArgument;
     uint64_t expected = 0;
     for(size_t i = 0; i < count; ++i) {
@@ -72,7 +72,7 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
         return result;
     }
 
-    IOReturn bad = validateSpans(cpu, spans, count, bytes);
+    IOReturn bad = validateSpans(cpu, true, spans, count, bytes);
     if(bad != kIOReturnSuccess) {
         source->release(cpu, spans, count);
         IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
@@ -122,24 +122,11 @@ IOReturn NativeMaliMemory::prepareImported(NativeMaliMemorySource *source,
         return result;
     }
 
-    IOReturn bad = validateSpans(cpu, spans, count, bytes);
+    IOReturn bad = validateSpans(cpu, false, spans, count, bytes);
     if(bad != kIOReturnSuccess) {
         source->release(cpu, spans, count);
         IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
         return bad;
-    }
-
-    /* On a non-coherent GPU, flush any dirty CPU cache lines from the caller's
-     * WB-cached allocation (e.g. IOSurface) to PoC and drop them so later CPU
-     * evictions cannot clobber GPU output. */
-    if(!cpuCoherent) {
-        const IOReturn sync = maintainer->maintain(cpu, bytes,
-            NativeMaliCacheCleanInvalidate);
-        if(sync != kIOReturnSuccess) {
-            source->release(cpu, spans, count);
-            IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
-            return sync;
-        }
     }
 
     NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
@@ -159,6 +146,18 @@ IOReturn NativeMaliMemory::prepareImported(NativeMaliMemorySource *source,
     maintainer_ = maintainer;
     source_ = source;
     prepared_ = true;
+
+    /* On a non-coherent GPU, flush any dirty CPU cache lines from the caller's
+     * WB-cached allocation (e.g. IOSurface) to PoC and drop them so later CPU
+     * evictions cannot clobber GPU output. */
+    if(!cpuCoherent) {
+        const IOReturn sync = maintainRange(0, bytes,
+            NativeMaliCacheCleanInvalidate);
+        if(sync != kIOReturnSuccess) {
+            reset();
+            return sync;
+        }
+    }
     return kIOReturnSuccess;
 }
 
@@ -254,6 +253,30 @@ IOReturn NativeMaliMemory::unmap()
     return kIOReturnSuccess;
 }
 
+IOReturn NativeMaliMemory::maintainRange(size_t offset, size_t bytes,
+    NativeMaliCacheOperation operation) const
+{
+    if(cpu_) {
+        return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset,
+            bytes, operation);
+    }
+    const uint64_t rangeStart = offset;
+    const uint64_t rangeEnd = rangeStart + bytes;
+    for(size_t i = 0; i < spans_; ++i) {
+        const uint64_t sStart = span_[i].offset;
+        const uint64_t sEnd = sStart + span_[i].bytes;
+        if(sEnd <= rangeStart)continue;
+        if(sStart >= rangeEnd)break;
+        const uint64_t lo = sStart > rangeStart ? sStart : rangeStart;
+        const uint64_t hi = sEnd < rangeEnd ? sEnd : rangeEnd;
+        const uint64_t phys = span_[i].physical + (lo - sStart);
+        const IOReturn status = maintainer_->maintainPhysical(phys,
+            static_cast<size_t>(hi - lo), operation);
+        if(status != kIOReturnSuccess)return status;
+    }
+    return kIOReturnSuccess;
+}
+
 IOReturn NativeMaliMemory::cleanForDevice(size_t offset, size_t bytes)
 {
     if(!prepared_)return kIOReturnNotReady;
@@ -262,8 +285,7 @@ IOReturn NativeMaliMemory::cleanForDevice(size_t offset, size_t bytes)
     /* dma_map_sgtable() is a no-op on a coherent device (panfrost_device.c:269
      * decides which one this is). */
     if(!bytes || coherent_)return kIOReturnSuccess;
-    return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset, bytes,
-        NativeMaliCacheClean);
+    return maintainRange(offset, bytes, NativeMaliCacheClean);
 }
 
 IOReturn NativeMaliMemory::invalidateForCpu(size_t offset, size_t bytes)
@@ -272,8 +294,7 @@ IOReturn NativeMaliMemory::invalidateForCpu(size_t offset, size_t bytes)
     IOReturn result = checkBufferRange(bytes_, offset, bytes);
     if(result != kIOReturnSuccess)return result;
     if(!bytes || coherent_)return kIOReturnSuccess;
-    return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset, bytes,
-        NativeMaliCacheInvalidate);
+    return maintainRange(offset, bytes, NativeMaliCacheInvalidate);
 }
 
 IOReturn NativeMaliMemory::cleanInvalidate(size_t offset, size_t bytes)
@@ -282,6 +303,5 @@ IOReturn NativeMaliMemory::cleanInvalidate(size_t offset, size_t bytes)
     IOReturn result = checkBufferRange(bytes_, offset, bytes);
     if(result != kIOReturnSuccess)return result;
     if(!bytes || coherent_)return kIOReturnSuccess;
-    return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset, bytes,
-        NativeMaliCacheCleanInvalidate);
+    return maintainRange(offset, bytes, NativeMaliCacheCleanInvalidate);
 }

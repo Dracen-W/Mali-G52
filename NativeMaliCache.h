@@ -29,6 +29,7 @@
 #define NATIVE_MALI_CACHE_H
 #include <IOKit/IOTypes.h>
 #include <stddef.h>
+#include <stdint.h>
 
 enum NativeMaliCacheOperation {
     NativeMaliCacheClean,          /* clean to PoC: before the GPU reads */
@@ -47,5 +48,15 @@ public:
 
     virtual IOReturn maintain(void *cpu, size_t bytes,
         NativeMaliCacheOperation operation) = 0;
+    /* Physical-address cache maintenance for imported host BOs that have no
+     * kernel virtual mapping (avoids exhausting XNU's small 8 MiB io_submap). */
+    virtual IOReturn maintainPhysical(uint64_t phys, size_t bytes,
+        NativeMaliCacheOperation operation)
+    {
+        (void)phys;
+        (void)bytes;
+        (void)operation;
+        return kIOReturnUnsupported;
+    }
 };
 #endif

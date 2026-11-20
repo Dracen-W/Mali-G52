@@ -10,6 +10,9 @@
 #include <kern/task.h>
 #include <string.h>
 
+extern "C" void flush_dcache64(addr64_t addr, unsigned count, int phys);
+extern "C" void clean_dcache64(addr64_t addr, unsigned count, int phys);
+
 namespace {
 
 uint64_t outputLimit(uint32_t bits)
@@ -186,8 +189,8 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
 
     memset(mapping, 0, bytes);
     slot->cpu = mapping;
+    slot->firstPhysical = spans[0].physical;
     slot->descriptor = descriptor;
-    slot->kernelMap = nullptr;
     slot->bytes = bytes;
     *cpu = mapping;
     *count = spans_used;
@@ -255,19 +258,13 @@ IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
         return status;
     }
 
-    /* Map into kernel VA with default (WB) attributes matching the caller's
-     * IOSurface / host allocation so EL1 cache maintenance avoids ARM64
-     * mismatched memory attributes. */
-    IOMemoryMap *kmap = descriptor->map(kIOMapAnywhere);
-    if(!kmap) {
-        (void)descriptor->complete();
-        descriptor->release();
-        return kIOReturnNoMemory;
-    }
-    void *mapping = reinterpret_cast<void *>(kmap->getVirtualAddress());
+    /* Do NOT map imported IOSurface/user allocations into kernel VA (XNU's
+     * io_submap is only 8 MiB, smaller than a single 1080x2340 framebuffer).
+     * Pinning via prepare() + walking physical segments is zero-copy, and
+     * cache maintenance operates directly on physical addresses via XNU's
+     * linear direct map (clean_dcache64 / flush_dcache64). */
     size_t spans_used = 0;
-    if(!mapping || (reinterpret_cast<uintptr_t>(mapping) & (NativeMaliVmGranule - 1)) ||
-        kmap->getLength() < bytes || descriptor->getLength() != bytes) {
+    if(descriptor->getLength() != bytes) {
         status = kIOReturnUnsupported;
         goto failed;
     }
@@ -275,31 +272,35 @@ IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
     status = walkSpans(descriptor, bytes, spans, &spans_used);
     if(status != kIOReturnSuccess)goto failed;
 
-    slot->cpu = mapping;
+    slot->cpu = nullptr;
+    slot->firstPhysical = spans[0].physical;
     slot->descriptor = descriptor;
-    slot->kernelMap = kmap;
     slot->bytes = bytes;
-    *cpu = mapping;
+    *cpu = nullptr;
     *count = spans_used;
     return kIOReturnSuccess;
 
 failed:
-    kmap->release();
     (void)descriptor->complete();
     descriptor->release();
     return status;
 }
 
-void NativeMaliXnuBuffers::release(void *cpu, const NativeMaliMemorySpan *,
-    size_t)
+void NativeMaliXnuBuffers::release(void *cpu, const NativeMaliMemorySpan *spans,
+    size_t count)
 {
-    if(!cpu)return;
+    const bool matchPhys = (cpu == nullptr);
+    if(matchPhys && (!spans || count == 0))return;
     for(auto &entry : entry_) {
-        if(entry.cpu != cpu || !entry.descriptor)continue;
+        if(!entry.descriptor)continue;
+        if(matchPhys) {
+            if(entry.cpu != nullptr || entry.firstPhysical != spans[0].physical)
+                continue;
+        } else if(entry.cpu != cpu) {
+            continue;
+        }
         IOMemoryDescriptor *descriptor = entry.descriptor;
-        IOMemoryMap *kmap = entry.kernelMap;
         entry = Entry{};
-        if(kmap)kmap->release();
         const IOReturn status = descriptor->complete();
         if(status != kIOReturnSuccess) {
             IOLog("NativeMali: buffer complete failed 0x%x, leaking %lu bytes\n",
@@ -370,5 +371,28 @@ IOReturn NativeMaliXnuCache::maintain(void *cpu, size_t bytes,
     }
     __asm__ volatile("dsb sy" ::: "memory");
     enable_preemption();
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliXnuCache::maintainPhysical(uint64_t phys, size_t bytes,
+    NativeMaliCacheOperation operation)
+{
+    if(!phys || bytes == 0)return kIOReturnBadArgument;
+    if(operation != NativeMaliCacheClean &&
+        operation != NativeMaliCacheInvalidate &&
+        operation != NativeMaliCacheCleanInvalidate)
+        return kIOReturnBadArgument;
+    if(bytes > UINT64_MAX - phys)return kIOReturnBadArgument;
+
+    constexpr size_t kMaxChunk = 16u * 1024u * 1024u;
+    size_t done = 0;
+    while(done < bytes) {
+        const size_t chunk = (bytes - done) > kMaxChunk ? kMaxChunk : (bytes - done);
+        if(operation == NativeMaliCacheClean)
+            clean_dcache64(phys + done, static_cast<unsigned>(chunk), 1);
+        else
+            flush_dcache64(phys + done, static_cast<unsigned>(chunk), 1);
+        done += chunk;
+    }
     return kIOReturnSuccess;
 }

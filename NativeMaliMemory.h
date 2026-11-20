@@ -108,6 +108,9 @@ class NativeMaliMemory final {
     uint32_t as_ = 0;
     uint64_t iova_ = 0;
     bool mapped_ = false;
+
+    IOReturn maintainRange(size_t offset, size_t bytes,
+        NativeMaliCacheOperation operation) const;
 public:
     NativeMaliMemory() = default;
     ~NativeMaliMemory();

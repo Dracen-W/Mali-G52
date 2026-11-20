@@ -108,8 +108,8 @@ private:
         NativeMaliMemorySpan *spans, size_t *count) const;
     struct Entry {
         void *cpu = nullptr;
+        uint64_t firstPhysical = 0;
         IOMemoryDescriptor *descriptor = nullptr;
-        IOMemoryMap *kernelMap = nullptr;
         size_t bytes = 0;
     };
     Entry entry_[NativeMaliBoTableCapacity]{};
@@ -124,6 +124,8 @@ private:
 class NativeMaliXnuCache final : public NativeMaliCacheMaintainer {
 public:
     IOReturn maintain(void *cpu, size_t bytes,
+        NativeMaliCacheOperation operation) override;
+    IOReturn maintainPhysical(uint64_t phys, size_t bytes,
         NativeMaliCacheOperation operation) override;
 };
 #endif
