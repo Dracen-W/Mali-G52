@@ -897,53 +897,10 @@ void NativeMaliGpuClient::afterMethod(uint32_t method, const void *input,
             }
             break;
         }
-        case NativeMaliMethodBoAlloc: {
-            const NativeMaliAbiBoAllocReply *reply =
-                static_cast<const NativeMaliAbiBoAllocReply *>(output);
-            if(reply) {
-                snprintf(trace, sizeof(trace), "MALI BO %08x%08x",
-                    static_cast<uint32_t>(reply->handle >> 32),
-                    static_cast<uint32_t>(reply->handle));
-                native_gop_text(16, trace);
-            }
-            break;
-        }
-        case NativeMaliMethodBoMap: {
-            const NativeMaliAbiBoMapReply *reply =
-                static_cast<const NativeMaliAbiBoMapReply *>(output);
-            if(reply) {
-                snprintf(trace, sizeof(trace), "MALI IOVA %08x%08x",
-                    static_cast<uint32_t>(reply->iova >> 32),
-                    static_cast<uint32_t>(reply->iova));
-                native_gop_text(16, trace);
-            }
-            break;
-        }
-        case NativeMaliMethodBoCpuMap: {
-            const NativeMaliAbiBoCpuMapReply *reply =
-                static_cast<const NativeMaliAbiBoCpuMapReply *>(output);
-            if(reply) {
-                snprintf(trace, sizeof(trace), "MALI CPU T%u %u",
-                    reply->token, static_cast<uint32_t>(reply->bytes));
-                native_gop_text(16, trace);
-            }
-            break;
-        }
-        case NativeMaliMethodSubmit: {
-            const NativeMaliAbiSubmitReply *reply =
-                static_cast<const NativeMaliAbiSubmitReply *>(output);
-            if(reply) {
-                snprintf(trace, sizeof(trace), "MALI FENCE %08x%08x",
-                    static_cast<uint32_t>(reply->fence >> 32),
-                    static_cast<uint32_t>(reply->fence));
-                native_gop_text(17, trace);
-            }
-            break;
-        }
         case NativeMaliMethodGetStatus: {
             const NativeMaliAbiStatus *reply =
                 static_cast<const NativeMaliAbiStatus *>(output);
-            if(reply) {
+            if(reply && (reply->faults != 0 || reply->resets != 0)) {
                 snprintf(trace, sizeof(trace), "MALI F%u R%u",
                     static_cast<uint32_t>(reply->faults),
                     static_cast<uint32_t>(reply->resets));
@@ -1005,7 +962,11 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
     if(status == kIOReturnSuccess)
         client->afterMethod(arguments->selector, arguments->structureInput,
             arguments->structureOutput);
-    if(native_gop_text) {
+    if(native_gop_text &&
+        (status != kIOReturnSuccess ||
+         arguments->selector == NativeMaliMethodQuery ||
+         arguments->selector == NativeMaliMethodGetDeviceInfo ||
+         arguments->selector == NativeMaliMethodReset)) {
         char trace[64];
         snprintf(trace, sizeof(trace), "MALI M%u %s %s",
             arguments->selector, maliMethodName(arguments->selector),
