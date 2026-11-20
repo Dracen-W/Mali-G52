@@ -2,6 +2,7 @@
 /* The client's BO state machine; the rules and their sources are in
  * NativeMaliBoTable.h. */
 #include "NativeMaliBoTable.h"
+#include <string.h>
 
 NativeMaliBoTable::~NativeMaliBoTable()
 {
@@ -278,6 +279,31 @@ bool NativeMaliBoTable::covers(uint64_t start, uint64_t bytes) const
          * wrap. */
         if(start < begin || start - begin > size)continue;
         if(bytes <= size - (start - begin))return true;
+    }
+    return false;
+}
+
+bool NativeMaliBoTable::readJobType(uint64_t start, uint64_t bytes,
+    uint32_t *jobType)
+{
+    if(!bytes || !jobType)return false;
+    *jobType = 0;
+    for(Slot &slot : slot_) {
+        if(!slot.live || !slot.mapped)continue;
+        const uint64_t begin = slot.memory.iova();
+        const uint64_t size = slot.memory.bytes();
+        if(start < begin || start - begin > size)continue;
+        const uint64_t off = start - begin;
+        if(bytes > size - off)continue;
+        const uint8_t *cpu = static_cast<const uint8_t *>(slot.memory.cpu());
+        if(cpu && bytes >= 20) {
+            (void)slot.memory.invalidateForCpu(static_cast<size_t>(off),
+                static_cast<size_t>(bytes));
+            uint32_t word4 = 0;
+            memcpy(&word4, cpu + off + 16, sizeof(word4));
+            *jobType = (word4 >> 1) & 0x7fu;
+        }
+        return true;
     }
     return false;
 }

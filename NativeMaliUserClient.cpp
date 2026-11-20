@@ -204,8 +204,11 @@ IOReturn NativeMaliUserClient::submit(const NativeMaliAbiSubmit &request,
     IOReturn result = NativeMaliAbiValidate::submit(request);
     if(result != kIOReturnSuccess)return result;
     /* The chain head must be an address this client mapped: the hardware will
-     * fetch 64 bytes there, and an unmapped address is a GPU fault. */
-    if(!bo_.covers(request.job_chain, NativeMaliJobHeadAlignment))
+     * fetch 64 bytes there, and an unmapped address is a GPU fault. Read the
+     * v7 job header type (word 4 bits 7:1) so Fragment (9) runs on JS0 and
+     * Vertex/Tiler/Compute run on JS1 (panfrost_job_get_slot()). */
+    uint32_t jobType = 0;
+    if(!bo_.readJobType(request.job_chain, NativeMaliJobHeadAlignment, &jobType))
         return kIOReturnBadArgument;
 
     if(request.wait_fence) {
@@ -217,7 +220,24 @@ IOReturn NativeMaliUserClient::submit(const NativeMaliAbiSubmit &request,
     }
 
     uint32_t slot = 0;
-    if(!chooseSlot(&slot))return kIOReturnBusy;
+    if(jobType != 0) {
+        /* Mali-G52 JM v7: JS0 is fragment-only, JS1 is vertex/tiler/compute. */
+        const uint32_t preferred = (jobType == 9u) ? 0u : 1u;
+        if((jobs_->present() & (1u << preferred)) != 0) {
+            if(jobs_->faulted(preferred))return kIOReturnNotReady;
+            if(ownOutstanding(preferred)) {
+                const NativeMaliFence own{preferred, submitted_[preferred]};
+                result = waitForFence(own, UINT64_C(5000000000), nullptr);
+                if(result != kIOReturnSuccess)return result;
+            }
+            if(jobs_->outstanding(preferred))return kIOReturnBusy;
+            slot = preferred;
+        } else if(!chooseSlot(&slot)) {
+            return kIOReturnBusy;
+        }
+    } else if(!chooseSlot(&slot)) {
+        return kIOReturnBusy;
+    }
 
     uint32_t flushId = 0;
     result = gpu_->latestFlushId(&flushId);

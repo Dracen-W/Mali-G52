@@ -127,6 +127,7 @@ public:
      * chain head is only a GPU address; this is how the submission path checks
      * that the address is one this client actually mapped. */
     bool covers(uint64_t start, uint64_t bytes) const;
+    bool readJobType(uint64_t start, uint64_t bytes, uint32_t *jobType);
     bool mapped(uint64_t handle) const;
     bool coherent() const { return coherent_; }
     /* The backing object of a live handle, for the wrapper and for kernel
