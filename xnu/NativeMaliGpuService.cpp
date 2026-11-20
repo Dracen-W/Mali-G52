@@ -30,6 +30,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
+#include <kern/clock.h>
 #include <kern/task.h>
 #include <string.h>
 
@@ -233,6 +234,8 @@ class NativeMaliGpuClient final : public IOUserClient {
         IOExternalMethodArguments *arguments);
     IOReturn shutdownLocked();
     void afterMethod(uint32_t method, const void *input, const void *output);
+    IOReturn waitFenceYielding(NativeMaliGpuService *service, uint64_t fence,
+        uint64_t timeoutNs);
     void dropViews();
     void dropDeadViews();
     View *viewSlot(uint32_t token);
@@ -942,6 +945,47 @@ IOReturn allocateDispatch(uint32_t selector, IOExternalMethodDispatch *entry,
 
 } // namespace
 
+IOReturn NativeMaliGpuClient::waitFenceYielding(NativeMaliGpuService *service,
+    uint64_t fence, uint64_t timeoutNs)
+{
+    NativeMaliAbiWaitFence pollReq{};
+    pollReq.fence = fence;
+    pollReq.timeout_ns = 0;
+
+    uint64_t startAbs = 0;
+    clock_get_uptime(&startAbs);
+    uint64_t startNs = 0;
+    absolutetime_to_nanoseconds(startAbs, &startNs);
+    const uint64_t spinBudgetNs = UINT64_C(500000); /* 500 us fast spin, then yield */
+
+    for(;;) {
+        Session *session = session_;
+        if(!session || !service->device().clientUsable(&session->core))
+            return kIOReturnNotReady;
+        const IOReturn status = session->core.dispatch(
+            NativeMaliMethodWaitFence, &pollReq, sizeof(pollReq), nullptr, 0);
+        if(status != kIOReturnTimeout)return status;
+        if(timeoutNs == 0)return kIOReturnTimeout;
+
+        uint64_t nowAbs = 0;
+        clock_get_uptime(&nowAbs);
+        uint64_t nowNs = 0;
+        absolutetime_to_nanoseconds(nowAbs, &nowNs);
+        const uint64_t elapsedNs = nowNs - startNs;
+        if(elapsedNs >= timeoutNs)return kIOReturnTimeout;
+
+        /* Release the global session lock while waiting so other Metal clients
+         * (SpringBoard, Preferences, mediaserverd) are not stalled, and sleep
+         * 1 ms once past the sub-millisecond fast spin so CPU cores stay free. */
+        IOLockUnlock(service->sessionLock());
+        if(elapsedNs < spinBudgetNs)
+            IODelay(20);
+        else
+            IOSleep(1);
+        IOLockLock(service->sessionLock());
+    }
+}
+
 IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
     IOExternalMethodArguments *arguments)
 {
@@ -955,10 +999,42 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
      * this call waits. */
     Session *session = client->session_;
     IOReturn status = kIOReturnNotReady;
-    if(session && service->device().clientUsable(&session->core))
-        status = session->core.dispatch(arguments->selector,
-            arguments->structureInput, arguments->structureInputSize,
-            arguments->structureOutput, arguments->structureOutputSize);
+    if(session && service->device().clientUsable(&session->core)) {
+        if(arguments->selector == NativeMaliMethodWaitFence &&
+            arguments->structureInput &&
+            arguments->structureInputSize == sizeof(NativeMaliAbiWaitFence)) {
+            const NativeMaliAbiWaitFence *req =
+                static_cast<const NativeMaliAbiWaitFence *>(arguments->structureInput);
+            if(req->timeout_ns != 0)
+                status = client->waitFenceYielding(service, req->fence, req->timeout_ns);
+            else
+                status = session->core.dispatch(arguments->selector,
+                    arguments->structureInput, arguments->structureInputSize,
+                    arguments->structureOutput, arguments->structureOutputSize);
+        } else if(arguments->selector == NativeMaliMethodSubmit &&
+            arguments->structureInput &&
+            arguments->structureInputSize == sizeof(NativeMaliAbiSubmit)) {
+            const NativeMaliAbiSubmit *req =
+                static_cast<const NativeMaliAbiSubmit *>(arguments->structureInput);
+            status = kIOReturnSuccess;
+            if(req->wait_fence != 0 && req->wait_timeout_ns != 0)
+                status = client->waitFenceYielding(service, req->wait_fence,
+                    req->wait_timeout_ns);
+            if(status == kIOReturnSuccess) {
+                session = client->session_;
+                if(session && service->device().clientUsable(&session->core))
+                    status = session->core.dispatch(arguments->selector,
+                        arguments->structureInput, arguments->structureInputSize,
+                        arguments->structureOutput, arguments->structureOutputSize);
+                else
+                    status = kIOReturnNotReady;
+            }
+        } else {
+            status = session->core.dispatch(arguments->selector,
+                arguments->structureInput, arguments->structureInputSize,
+                arguments->structureOutput, arguments->structureOutputSize);
+        }
+    }
     if(status == kIOReturnSuccess)
         client->afterMethod(arguments->selector, arguments->structureInput,
             arguments->structureOutput);
