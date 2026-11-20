@@ -255,7 +255,21 @@ IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
     IOReturn status = descriptor->prepare();
     if(status != kIOReturnSuccess) {
         descriptor->release();
-        return status;
+        /* Read-only user mappings (e.g. PROT_READ mmap'd assets passed to
+         * newBufferWithBytesNoCopy:) fail kIODirectionInOut with
+         * KERN_PROTECTION_FAILURE (0x2). Retry with kIODirectionOut
+         * (host-to-device read-only) so XNU wires them with VM_PROT_READ. */
+        descriptor = IOMemoryDescriptor::withAddressRange(
+            static_cast<mach_vm_address_t>(userAddress),
+            static_cast<mach_vm_size_t>(bytes),
+            static_cast<IOOptionBits>(kIODirectionOut), owningTask_);
+        if(!descriptor)return status;
+        const IOReturn roStatus = descriptor->prepare();
+        if(roStatus != kIOReturnSuccess) {
+            descriptor->release();
+            return roStatus;
+        }
+        status = kIOReturnSuccess;
     }
 
     /* Do NOT map imported IOSurface/user allocations into kernel VA (XNU's
