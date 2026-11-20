@@ -227,7 +227,7 @@ class NativeMaliGpuClient final : public IOUserClient {
     NativeMaliGpuService *service_ = nullptr;
     task_t owningTask_ = nullptr;
     Session *session_ = nullptr;
-    View views_[NativeMaliBoTableCapacity]{};
+    View *views_ = nullptr;
     bool registered_ = false;
 
     static IOReturn action(OSObject *target, void *reference,
@@ -663,6 +663,10 @@ bool NativeMaliGpuClient::initWithTask(task_t owningTask, void *securityID,
 {
     if(!IOUserClient::initWithTask(owningTask, securityID, type, properties))
         return false;
+    views_ = IONewData(View, NativeMaliBoTableCapacity);
+    if(!views_)return false;
+    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i)
+        views_[i] = View{};
     owningTask_ = owningTask;
     return true;
 }
@@ -763,22 +767,27 @@ void NativeMaliGpuClient::free()
         service_->detachSession(this);
         IOLockUnlock(service_->sessionLock());
     }
+    if(views_) {
+        IODeleteData(views_, View, NativeMaliBoTableCapacity);
+        views_ = nullptr;
+    }
     session_ = nullptr;
     IOUserClient::free();
 }
 
 NativeMaliGpuClient::View *NativeMaliGpuClient::viewSlot(uint32_t token)
 {
-    if(token == 0 || token > NativeMaliBoTableCapacity)return nullptr;
+    if(!views_ || token == 0 || token > NativeMaliBoTableCapacity)return nullptr;
     return &views_[token - 1];
 }
 
 void NativeMaliGpuClient::dropViews()
 {
-    for(auto &view : views_)
-        if(view.descriptor) {
-            view.descriptor->release();
-            view = View{};
+    if(!views_)return;
+    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i)
+        if(views_[i].descriptor) {
+            views_[i].descriptor->release();
+            views_[i] = View{};
         }
 }
 
@@ -787,12 +796,12 @@ void NativeMaliGpuClient::dropDeadViews()
     /* After a BoFree the freed token no longer resolves; every other live
      * mapping keeps its view so a later IOConnectUnmapMemory64 still sees the
      * same descriptor. */
-    if(!session_)return;
-    for(auto &view : views_)
-        if(view.descriptor) {
-            if(session_->core.memoryForToken(view.token))continue;
-            view.descriptor->release();
-            view = View{};
+    if(!session_ || !views_)return;
+    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i)
+        if(views_[i].descriptor) {
+            if(session_->core.memoryForToken(views_[i].token))continue;
+            views_[i].descriptor->release();
+            views_[i] = View{};
         }
 }
 
@@ -1038,8 +1047,14 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
     if(status == kIOReturnSuccess)
         client->afterMethod(arguments->selector, arguments->structureInput,
             arguments->structureOutput);
+    const bool benignPollTimeout =
+        (arguments->selector == NativeMaliMethodWaitFence &&
+         status == kIOReturnTimeout &&
+         arguments->structureInput &&
+         arguments->structureInputSize == sizeof(NativeMaliAbiWaitFence) &&
+         static_cast<const NativeMaliAbiWaitFence *>(arguments->structureInput)->timeout_ns == 0);
     if(native_gop_text &&
-        (status != kIOReturnSuccess ||
+        ((status != kIOReturnSuccess && !benignPollTimeout) ||
          arguments->selector == NativeMaliMethodQuery ||
          arguments->selector == NativeMaliMethodGetDeviceInfo ||
          arguments->selector == NativeMaliMethodReset)) {
