@@ -61,6 +61,7 @@ void NativeMaliBoTable::clear(Slot &slot)
     slot.live = false;
     slot.mapped = false;
     slot.cpuMapped = false;
+    slot.imported = false;
 }
 
 IOReturn NativeMaliBoTable::open(NativeMaliMemorySource *source,
@@ -120,6 +121,7 @@ IOReturn NativeMaliBoTable::alloc(const NativeMaliAbiBoAlloc &request,
     slot->live = true;
     slot->mapped = false;
     slot->cpuMapped = false;
+    slot->imported = false;
     index_.insert(handle, static_cast<uint32_t>(slot - slot_));
     ++live_;
     reply->handle = handle;
@@ -226,6 +228,62 @@ IOReturn NativeMaliBoTable::cpuUnmap(const NativeMaliAbiBoCpuUnmap &request)
     return kIOReturnSuccess;
 }
 
+IOReturn NativeMaliBoTable::importHost(const NativeMaliAbiBoImportHost &request,
+    NativeMaliAbiBoImportHostReply *reply)
+{
+    if(!reply)return kIOReturnBadArgument;
+    reply->handle = 0;
+    if(!open_)return kIOReturnNotReady;
+
+    IOReturn result = NativeMaliAbiValidate::boImportHost(request, maxBytes_);
+    if(result != kIOReturnSuccess)return result;
+
+    Slot *slot = freeSlot();
+    if(!slot)return kIOReturnNoResources;
+
+    result = slot->memory.prepareImported(source_, request.address,
+        static_cast<size_t>(request.bytes), coherent_, maintainer_);
+    if(result != kIOReturnSuccess)return result;
+
+    uint64_t handle = nextHandle_++;
+    if(nextHandle_ == 0)++nextHandle_;
+    if(handle == 0)handle = nextHandle_++;
+
+    slot->handle = handle;
+    slot->iova = 0;
+    slot->permissions = 0;
+    slot->cpuToken = 0;
+    slot->live = true;
+    slot->mapped = false;
+    slot->cpuMapped = false;
+    slot->imported = true;
+    index_.insert(handle, static_cast<uint32_t>(slot - slot_));
+    ++live_;
+    reply->handle = handle;
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliBoTable::syncBo(const NativeMaliAbiBoSync &request)
+{
+    if(!open_)return kIOReturnNotReady;
+    if(request.handle == 0)return kIOReturnBadArgument;
+    Slot *slot = find(request.handle);
+    if(!slot)return kIOReturnBadArgument;
+
+    const IOReturn valid = NativeMaliAbiValidate::boSync(request,
+        slot->memory.bytes());
+    if(valid != kIOReturnSuccess)return valid;
+
+    if(request.op == NativeMaliBoSyncClean)
+        return slot->memory.cleanForDevice(static_cast<size_t>(request.offset),
+            static_cast<size_t>(request.bytes));
+    if(request.op == NativeMaliBoSyncInvalidate)
+        return slot->memory.invalidateForCpu(static_cast<size_t>(request.offset),
+            static_cast<size_t>(request.bytes));
+    return slot->memory.cleanInvalidate(static_cast<size_t>(request.offset),
+        static_cast<size_t>(request.bytes));
+}
+
 IOReturn NativeMaliBoTable::releaseAll()
 {
     if(!open_)return kIOReturnNotReady;
@@ -261,6 +319,7 @@ void NativeMaliBoTable::reset()
         slot.live = false;
         slot.mapped = false;
         slot.cpuMapped = false;
+        slot.imported = false;
     }
     index_.release();
     live_ = 0;

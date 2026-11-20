@@ -31,6 +31,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOTypes.h>
+#include <kern/task.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "NativeMaliBoTable.h"
@@ -88,9 +89,12 @@ class NativeMaliXnuBuffers final : public NativeMaliMemorySource {
 public:
     NativeMaliXnuBuffers() = default;
     void setOutputLimit(uint32_t oas_bits);
+    void setOwningTask(task_t task) { owningTask_ = task; }
 
     IOReturn alloc(size_t bytes, void **cpu, NativeMaliMemorySpan *spans,
         size_t *count) override;
+    IOReturn importHost(uint64_t userAddress, size_t bytes, void **cpu,
+        NativeMaliMemorySpan *spans, size_t *count) override;
     void release(void *cpu, const NativeMaliMemorySpan *spans,
         size_t count) override;
 
@@ -100,12 +104,16 @@ public:
     IOMemoryDescriptor *descriptor(void *cpu);
 
 private:
+    IOReturn walkSpans(IOMemoryDescriptor *descriptor, size_t bytes,
+        NativeMaliMemorySpan *spans, size_t *count) const;
     struct Entry {
         void *cpu = nullptr;
-        IOBufferMemoryDescriptor *descriptor = nullptr;
+        IOMemoryDescriptor *descriptor = nullptr;
+        IOMemoryMap *kernelMap = nullptr;
         size_t bytes = 0;
     };
     Entry entry_[NativeMaliBoTableCapacity]{};
+    task_t owningTask_ = nullptr;
     uint64_t limit_ = UINT64_C(1) << 40;
 };
 

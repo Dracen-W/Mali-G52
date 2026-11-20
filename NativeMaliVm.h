@@ -134,6 +134,7 @@ class NativeMaliVm final {
     NativeMaliPageSource *source_ = nullptr;
     NativeMaliCacheMaintainer *maintainer_ = nullptr;
     NativeMaliPage page_[NativeMaliVmMaxTables]{};
+    uint64_t dirtyTables_[(NativeMaliVmMaxTables + 63) / 64]{};
     size_t tables_ = 0;
     NativeMaliVmGeometry geometry_{};
     bool coherent_ = false;
@@ -144,8 +145,9 @@ class NativeMaliVm final {
     uint32_t shift(uint32_t level) const;
     uint32_t indexBits(uint32_t level) const;
     uint32_t index(uint64_t iova, uint32_t level) const;
-    IOReturn allocate(uint64_t **table, uint64_t *phys);
-    IOReturn descend(uint64_t iova, uint64_t **leaf);
+    void markDirty(size_t tableIndex);
+    IOReturn allocate(uint64_t **table, uint64_t *phys, size_t *tableIndex);
+    IOReturn descendL3(uint64_t iova, uint64_t **l3Table, size_t *tableIndex);
     /* Publish every table page with NativeMaliCacheClean when the walker is not
      * coherent; a no-op when it is coherent or when no maintainer was given. */
     IOReturn publishTables();

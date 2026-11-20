@@ -98,7 +98,55 @@ void testVersionAndMethod()
     CHECK(NativeMaliMethodQuery == 1);
     CHECK(NativeMaliMethodGetStatus == 10);
     CHECK(NativeMaliMethodReset == 11);
-    CHECK(NativeMaliMethodLast == NativeMaliMethodReset);
+    CHECK(NativeMaliMethodBoImportHost == 12);
+    CHECK(NativeMaliMethodBoSync == 13);
+    CHECK(NativeMaliMethodLast == NativeMaliMethodBoSync);
+
+    /* BoImportHost layout & validation */
+    CHECK(sizeof(NativeMaliAbiBoImportHost) == 24);
+    CHECK(sizeof(NativeMaliAbiBoImportHostReply) == 8);
+    CHECK(offsetof(NativeMaliAbiBoImportHost, address) == 0);
+    CHECK(offsetof(NativeMaliAbiBoImportHost, bytes) == 8);
+    CHECK(offsetof(NativeMaliAbiBoImportHost, flags) == 16);
+    CHECK(offsetof(NativeMaliAbiBoImportHost, reserved) == 20);
+    {
+        NativeMaliAbiBoImportHost req{};
+        req.address = 0x100000;
+        req.bytes = 0x4000;
+        CHECK(NativeMaliAbiValidate::boImportHost(req, NATIVE_MALI_ABI_MAX_BO_BYTES) == kIOReturnSuccess);
+        req.flags = 1;
+        CHECK(NativeMaliAbiValidate::boImportHost(req, NATIVE_MALI_ABI_MAX_BO_BYTES) == kIOReturnUnsupported);
+        req.flags = 0; req.reserved = 1;
+        CHECK(NativeMaliAbiValidate::boImportHost(req, NATIVE_MALI_ABI_MAX_BO_BYTES) == kIOReturnBadArgument);
+        req.reserved = 0; req.address = 0x100004;
+        CHECK(NativeMaliAbiValidate::boImportHost(req, NATIVE_MALI_ABI_MAX_BO_BYTES) == kIOReturnBadArgument);
+        req.address = 0x100000; req.bytes = NATIVE_MALI_ABI_MAX_BO_BYTES + 4096;
+        CHECK(NativeMaliAbiValidate::boImportHost(req, NATIVE_MALI_ABI_MAX_BO_BYTES) == kIOReturnNoResources);
+    }
+
+    /* BoSync layout & validation */
+    CHECK(sizeof(NativeMaliAbiBoSync) == 32);
+    CHECK(offsetof(NativeMaliAbiBoSync, handle) == 0);
+    CHECK(offsetof(NativeMaliAbiBoSync, offset) == 8);
+    CHECK(offsetof(NativeMaliAbiBoSync, bytes) == 16);
+    CHECK(offsetof(NativeMaliAbiBoSync, op) == 24);
+    CHECK(offsetof(NativeMaliAbiBoSync, reserved) == 28);
+    {
+        NativeMaliAbiBoSync sync{};
+        sync.handle = 1;
+        sync.offset = 0;
+        sync.bytes = 4096;
+        sync.op = NativeMaliBoSyncClean;
+        CHECK(NativeMaliAbiValidate::boSync(sync, 16384) == kIOReturnSuccess);
+        sync.op = NativeMaliBoSyncInvalidate;
+        CHECK(NativeMaliAbiValidate::boSync(sync, 16384) == kIOReturnSuccess);
+        sync.op = NativeMaliBoSyncCleanInvalidate;
+        CHECK(NativeMaliAbiValidate::boSync(sync, 16384) == kIOReturnSuccess);
+        sync.op = 99;
+        CHECK(NativeMaliAbiValidate::boSync(sync, 16384) == kIOReturnUnsupported);
+        sync.op = NativeMaliBoSyncClean; sync.offset = 16384; sync.bytes = 4096;
+        CHECK(NativeMaliAbiValidate::boSync(sync, 16384) == kIOReturnBadArgument);
+    }
 
     NativeMaliAbiQuery query{};
     query.abi_version = NativeMaliAbiVersion;

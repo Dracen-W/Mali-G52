@@ -103,7 +103,14 @@ uint32_t NativeMaliVm::index(uint64_t iova, uint32_t level) const
     return uint32_t((iova >> shift(level)) & ((UINT64_C(1) << bits) - 1));
 }
 
-IOReturn NativeMaliVm::allocate(uint64_t **table, uint64_t *phys)
+void NativeMaliVm::markDirty(size_t tableIndex)
+{
+    if(tableIndex < NativeMaliVmMaxTables)
+        dirtyTables_[tableIndex >> 6] |= UINT64_C(1) << (tableIndex & 63u);
+}
+
+IOReturn NativeMaliVm::allocate(uint64_t **table, uint64_t *phys,
+    size_t *tableIndex)
 {
     if(tables_ >= NativeMaliVmMaxTables || !source_)return kIOReturnNoResources;
     NativeMaliPage page{};
@@ -116,83 +123,97 @@ IOReturn NativeMaliVm::allocate(uint64_t **table, uint64_t *phys)
         return kIOReturnBadArgument;
     }
     memset(page.cpu, 0, NativeMaliVmGranule);
-    page_[tables_] = page;
+    const size_t idx = tables_;
+    page_[idx] = page;
+    markDirty(idx);
     *table = static_cast<uint64_t *>(page.cpu);
     *phys = page.phys;
+    if(tableIndex)*tableIndex = idx;
     ++tables_;
     return kIOReturnSuccess;
 }
 
-IOReturn NativeMaliVm::descend(uint64_t iova, uint64_t **leaf)
+IOReturn NativeMaliVm::descendL3(uint64_t iova, uint64_t **l3Table,
+    size_t *tableIndex)
 {
     uint64_t *table = pgd_;
-    for(uint32_t level = 0; level < kMaxLevels; ++level) {
+    size_t currentIndex = 0;
+    for(uint32_t level = 0; level < kMaxLevels - 1; ++level) {
         uint64_t *slot = &table[index(iova, level)];
-        if(level == kMaxLevels - 1) {
-            *leaf = slot;
-            return kIOReturnSuccess;
-        }
         const uint64_t entry = *slot;
         if(!entry) {
             uint64_t *next = nullptr;
             uint64_t phys = 0;
-            const IOReturn result = allocate(&next, &phys);
+            size_t nextIndex = 0;
+            const IOReturn result = allocate(&next, &phys, &nextIndex);
             if(result != kIOReturnSuccess)return result;
             *slot = encodeTable(phys);
+            markDirty(currentIndex);
             table = next;
+            currentIndex = nextIndex;
         } else if((entry & kTypeMask) == kTypeTable) {
             uint64_t *next = nullptr;
+            size_t nextIndex = 0;
+            const uint64_t targetPhys = decodePhysical(entry);
             for(size_t slot_index = 0; slot_index < tables_; ++slot_index)
-                if(page_[slot_index].phys == decodePhysical(entry)) {
+                if(page_[slot_index].phys == targetPhys) {
                     next = static_cast<uint64_t *>(page_[slot_index].cpu);
+                    nextIndex = slot_index;
                     break;
                 }
             if(!next)return kIOReturnIOError;   /* a table this space never made */
             table = next;
+            currentIndex = nextIndex;
         } else {
             /* A leaf blocks the way down: mapping over it would leak it. */
             return kIOReturnBusy;
         }
     }
-    return kIOReturnIOError;
+    *l3Table = table;
+    if(tableIndex)*tableIndex = currentIndex;
+    return kIOReturnSuccess;
 }
 
-/* The read-only twin of descend(): it never allocates. */
-static IOReturn find(const NativeMaliPage *pages, size_t count, uint64_t *pgd,
-    const NativeMaliVmGeometry &geometry, uint64_t iova, uint64_t **leaf)
+/* The read-only twin of descendL3(): it never allocates. */
+static IOReturn findL3(const NativeMaliPage *pages, size_t count, uint64_t *pgd,
+    const NativeMaliVmGeometry &geometry, uint64_t iova, uint64_t **l3Table,
+    size_t *tableIndex)
 {
     auto shift_of = [&](uint32_t level) { return (4 - level) * geometry.bits_per_level + 3; };
     auto bits_of = [&](uint32_t level) {
         return level == geometry.start_level ? geometry.pgd_bits : geometry.bits_per_level;
     };
     uint64_t *table = pgd;
-    for(uint32_t level = 0; level < 4; ++level) {
+    size_t currentIndex = 0;
+    for(uint32_t level = 0; level < 3; ++level) {
         const uint32_t bits = bits_of(level);
         const uint32_t slot = bits ? uint32_t((iova >> shift_of(level)) &
             ((UINT64_C(1) << bits) - 1)) : 0;
-        if(level == 3) {
-            *leaf = &table[slot];
-            return kIOReturnSuccess;
-        }
         const uint64_t entry = table[slot];
         if(!entry) {
-            *leaf = nullptr;
+            *l3Table = nullptr;
             return kIOReturnSuccess;
         }
         if((entry & 3) != 3) {
-            *leaf = nullptr;   /* a leaf above the last level: not ours */
+            *l3Table = nullptr;   /* a leaf above the last level: not ours */
             return kIOReturnSuccess;
         }
         uint64_t *next = nullptr;
+        size_t nextIndex = 0;
+        const uint64_t targetPhys = entry & UINT64_C(0x0000fffffffff000);
         for(size_t i = 0; i < count; ++i)
-            if(pages[i].phys == (entry & UINT64_C(0x0000fffffffff000))) {
+            if(pages[i].phys == targetPhys) {
                 next = static_cast<uint64_t *>(pages[i].cpu);
+                nextIndex = i;
                 break;
             }
         if(!next)return kIOReturnIOError;
         table = next;
+        currentIndex = nextIndex;
     }
-    return kIOReturnIOError;
+    *l3Table = table;
+    if(tableIndex)*tableIndex = currentIndex;
+    return kIOReturnSuccess;
 }
 
 NativeMaliVm::~NativeMaliVm()
@@ -213,7 +234,7 @@ IOReturn NativeMaliVm::prepare(NativeMaliPageSource *source, uint32_t ias, uint3
     geometry_ = geometry(ias, oas);
     uint64_t *root = nullptr;
     uint64_t root_phys = 0;
-    IOReturn result = allocate(&root, &root_phys);
+    IOReturn result = allocate(&root, &root_phys, nullptr);
     if(result != kIOReturnSuccess) {
         source_ = nullptr;   /* nothing was allocated, so nothing to release */
         pgd_ = nullptr;
@@ -235,10 +256,22 @@ IOReturn NativeMaliVm::prepare(NativeMaliPageSource *source, uint32_t ias, uint3
 IOReturn NativeMaliVm::publishTables()
 {
     if(!prepared_ || coherent_ || !maintainer_)return kIOReturnSuccess;
-    for(size_t i = 0; i < tables_; ++i) {
-        const IOReturn result = maintainer_->maintain(page_[i].cpu,
-            NativeMaliVmGranule, NativeMaliCacheClean);
-        if(result != kIOReturnSuccess)return result;
+    for(size_t word = 0; word < (NativeMaliVmMaxTables + 63) / 64; ++word) {
+        uint64_t mask = dirtyTables_[word];
+        while(mask) {
+            const uint32_t bit = static_cast<uint32_t>(__builtin_ctzll(mask));
+            const size_t idx = (word << 6) + bit;
+            if(idx >= tables_) {
+                dirtyTables_[word] &= ~(UINT64_C(1) << bit);
+                mask &= mask - 1;
+                continue;
+            }
+            const IOReturn result = maintainer_->maintain(page_[idx].cpu,
+                NativeMaliVmGranule, NativeMaliCacheClean);
+            if(result != kIOReturnSuccess)return result;
+            dirtyTables_[word] &= ~(UINT64_C(1) << bit);
+            mask &= mask - 1;
+        }
     }
     return kIOReturnSuccess;
 }
@@ -247,6 +280,7 @@ void NativeMaliVm::reset()
 {
     if(source_)for(size_t i = 0; i < tables_; ++i)source_->release(page_[i]);
     memset(page_, 0, sizeof(page_));
+    memset(dirtyTables_, 0, sizeof(dirtyTables_));
     tables_ = 0;
     pgd_ = nullptr;
     source_ = nullptr;
@@ -297,25 +331,43 @@ IOReturn NativeMaliVm::map(uint64_t iova, uint64_t paddr, uint64_t bytes, uint32
     if(paddr + bytes > (UINT64_C(1) << geometry_.oas))return kIOReturnBadArgument;
     IOReturn result = checkRange(geometry_, iova, bytes);
     if(result != kIOReturnSuccess)return result;
-    /* Two passes: refuse to overwrite anything, then write. A refusal therefore
-     * leaves no half-applied range behind. Tables created by the check stay
-     * allocated; only reset() takes them back. */
-    for(uint64_t offset = 0; offset < bytes; offset += NativeMaliVmGranule) {
-        uint64_t *leaf = nullptr;
-        result = descend(iova + offset, &leaf);
+    /* Two passes with L3 batching (up to 512 leaves / 2 MiB per walk):
+     * refuse to overwrite anything, then write. A refusal therefore leaves no
+     * half-applied range behind. Tables created by the check stay allocated;
+     * only reset() takes them back. */
+    for(uint64_t offset = 0; offset < bytes; ) {
+        uint64_t *l3 = nullptr;
+        size_t tableIndex = 0;
+        result = descendL3(iova + offset, &l3, &tableIndex);
         if(result != kIOReturnSuccess)return result;
-        if(*leaf)return kIOReturnBusy;
+        const uint32_t startSlot = index(iova + offset, kMaxLevels - 1);
+        const uint64_t remaining = (bytes - offset) >> kGranuleShift;
+        const uint64_t slotsLeft = NativeMaliVmPtesPerTable - startSlot;
+        const uint64_t batch = remaining < slotsLeft ? remaining : slotsLeft;
+        for(uint64_t i = 0; i < batch; ++i)
+            if(l3[startSlot + i])return kIOReturnBusy;
+        offset += batch << kGranuleShift;
     }
-    for(uint64_t offset = 0; offset < bytes; offset += NativeMaliVmGranule) {
-        uint64_t *leaf = nullptr;
-        result = descend(iova + offset, &leaf);
+    for(uint64_t offset = 0; offset < bytes; ) {
+        uint64_t *l3 = nullptr;
+        size_t tableIndex = 0;
+        result = descendL3(iova + offset, &l3, &tableIndex);
         if(result != kIOReturnSuccess)return result;
-        *leaf = encodeLeaf(paddr + offset, prot);
-        ++mapped_pages_;
+        const uint32_t startSlot = index(iova + offset, kMaxLevels - 1);
+        const uint64_t remaining = (bytes - offset) >> kGranuleShift;
+        const uint64_t slotsLeft = NativeMaliVmPtesPerTable - startSlot;
+        const uint64_t batch = remaining < slotsLeft ? remaining : slotsLeft;
+        for(uint64_t i = 0; i < batch; ++i) {
+            l3[startSlot + i] =
+                encodeLeaf(paddr + offset + (i << kGranuleShift), prot);
+        }
+        mapped_pages_ += batch;
+        markDirty(tableIndex);
+        offset += batch << kGranuleShift;
     }
-    /* Publish the leaves (and any table installed on the way down) before the
-     * caller can program or flush anything. A failed publish takes the range
-     * back out and returns the maintainer's error unchanged. */
+    /* Publish only dirty tables (newly created tables + modified L3 tables)
+     * before the caller flushes the MMU. A failed publish takes the range back
+     * out and returns the maintainer's error unchanged. */
     result = publishTables();
     if(result != kIOReturnSuccess) {
         (void)unmap(iova, bytes);
@@ -329,14 +381,28 @@ IOReturn NativeMaliVm::unmap(uint64_t iova, uint64_t bytes)
     if(!prepared_)return kIOReturnNotReady;
     const IOReturn result = checkRange(geometry_, iova, bytes);
     if(result != kIOReturnSuccess)return result;
-    for(uint64_t offset = 0; offset < bytes; offset += NativeMaliVmGranule) {
-        uint64_t *leaf = nullptr;
-        const IOReturn walked = find(page_, tables_, pgd_, geometry_, iova + offset, &leaf);
+    for(uint64_t offset = 0; offset < bytes; ) {
+        uint64_t *l3 = nullptr;
+        size_t tableIndex = 0;
+        const IOReturn walked = findL3(page_, tables_, pgd_, geometry_,
+            iova + offset, &l3, &tableIndex);
         if(walked != kIOReturnSuccess)return walked;
-        if(leaf && *leaf) {
-            *leaf = 0;
-            if(mapped_pages_)--mapped_pages_;
+        const uint32_t startSlot = index(iova + offset, kMaxLevels - 1);
+        const uint64_t remaining = (bytes - offset) >> kGranuleShift;
+        const uint64_t slotsLeft = NativeMaliVmPtesPerTable - startSlot;
+        const uint64_t batch = remaining < slotsLeft ? remaining : slotsLeft;
+        if(l3) {
+            bool changed = false;
+            for(uint64_t i = 0; i < batch; ++i) {
+                if(l3[startSlot + i]) {
+                    l3[startSlot + i] = 0;
+                    if(mapped_pages_)--mapped_pages_;
+                    changed = true;
+                }
+            }
+            if(changed)markDirty(tableIndex);
         }
+        offset += batch << kGranuleShift;
     }
     /* The cleared entries must be visible to the walker before the caller
      * flushes the range; on failure the leaves are already clear, so repeating
@@ -350,9 +416,10 @@ IOReturn NativeMaliVm::descriptor(uint64_t iova, uint64_t *pte) const
     *pte = 0;
     if(!prepared_)return kIOReturnNotReady;
     if(iova >= geometry_.span)return kIOReturnBadArgument;
-    uint64_t *leaf = nullptr;
-    const IOReturn walked = find(page_, tables_, pgd_, geometry_, iova, &leaf);
+    uint64_t *l3 = nullptr;
+    const IOReturn walked = findL3(page_, tables_, pgd_, geometry_, iova, &l3,
+        nullptr);
     if(walked != kIOReturnSuccess)return walked;
-    if(leaf)*pte = *leaf;
+    if(l3)*pte = l3[index(iova, kMaxLevels - 1)];
     return kIOReturnSuccess;
 }

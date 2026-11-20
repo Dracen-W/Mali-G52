@@ -135,6 +135,9 @@ public:
     IOReturn cpuMap(const NativeMaliAbiBoCpuMap &request,
         NativeMaliAbiBoCpuMapReply *reply);
     IOReturn cpuUnmap(const NativeMaliAbiBoCpuUnmap &request);
+    IOReturn importHostBo(const NativeMaliAbiBoImportHost &request,
+        NativeMaliAbiBoImportHostReply *reply);
+    IOReturn syncBo(const NativeMaliAbiBoSync &request);
     NativeMaliMemory *memoryForToken(uint32_t token)
     {
         return bo_.memoryForToken(token);

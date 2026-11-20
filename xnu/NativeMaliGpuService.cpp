@@ -74,6 +74,8 @@ static const char *maliMethodName(uint32_t method)
     case NativeMaliMethodWaitFence: return "WAIT";
     case NativeMaliMethodGetStatus: return "STATUS";
     case NativeMaliMethodReset: return "RESET";
+    case NativeMaliMethodBoImportHost: return "IMPORT";
+    case NativeMaliMethodBoSync: return "SYNC";
     default: return "?";
     }
 }
@@ -222,6 +224,7 @@ class NativeMaliGpuClient final : public IOUserClient {
     };
 
     NativeMaliGpuService *service_ = nullptr;
+    task_t owningTask_ = nullptr;
     Session *session_ = nullptr;
     View views_[NativeMaliBoTableCapacity]{};
     bool registered_ = false;
@@ -657,6 +660,7 @@ bool NativeMaliGpuClient::initWithTask(task_t owningTask, void *securityID,
 {
     if(!IOUserClient::initWithTask(owningTask, securityID, type, properties))
         return false;
+    owningTask_ = owningTask;
     return true;
 }
 
@@ -669,6 +673,7 @@ IOReturn NativeMaliGpuClient::mount(NativeMaliGpuService *service)
     const uint32_t oas = service->observation().oas;
     session->pages.setOutputLimit(oas);
     session->buffers.setOutputLimit(oas);
+    session->buffers.setOwningTask(owningTask_);
     /* The phone's DT has no "dma-coherent" property, so both the walker and the
      * buffers are non-coherent (docs/DEVICE.md, NativeMaliMemory.h). The
      * maintainer is required by NativeMaliMemory::prepare() in that case. */

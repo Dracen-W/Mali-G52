@@ -181,32 +181,13 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
         descriptor->getLength() != bytes)
         goto failed;
 
-    for(size_t offset = 0; offset < bytes; ) {
-        IOByteCount length = 0;
-        const addr64_t physical =
-            descriptor->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
-        size_t chunk = static_cast<size_t>(length) & ~(NativeMaliVmGranule - 1);
-        if(chunk > bytes - offset)chunk = bytes - offset;
-        if(!physical || (physical & (NativeMaliVmGranule - 1)) ||
-            chunk < NativeMaliVmGranule || physical >= limit_ ||
-            chunk > limit_ - physical)
-            goto failed;
-        if(spans_used &&
-            physical == spans[spans_used - 1].physical + spans[spans_used - 1].bytes) {
-            spans[spans_used - 1].bytes += chunk;
-        } else {
-            if(spans_used == NativeMaliMemoryMaxSpans)goto failed;
-            spans[spans_used].offset = offset;
-            spans[spans_used].physical = physical;
-            spans[spans_used].bytes = chunk;
-            ++spans_used;
-        }
-        offset += chunk;
-    }
+    status = walkSpans(descriptor, bytes, spans, &spans_used);
+    if(status != kIOReturnSuccess)goto failed;
 
     memset(mapping, 0, bytes);
     slot->cpu = mapping;
     slot->descriptor = descriptor;
+    slot->kernelMap = nullptr;
     slot->bytes = bytes;
     *cpu = mapping;
     *count = spans_used;
@@ -218,14 +199,107 @@ failed:
     return status;
 }
 
+IOReturn NativeMaliXnuBuffers::walkSpans(IOMemoryDescriptor *descriptor,
+    size_t bytes, NativeMaliMemorySpan *spans, size_t *count) const
+{
+    size_t spans_used = 0;
+    for(size_t offset = 0; offset < bytes; ) {
+        IOByteCount length = 0;
+        const addr64_t physical =
+            descriptor->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
+        size_t chunk = static_cast<size_t>(length) & ~(NativeMaliVmGranule - 1);
+        if(chunk > bytes - offset)chunk = bytes - offset;
+        if(!physical || (physical & (NativeMaliVmGranule - 1)) ||
+            chunk < NativeMaliVmGranule || physical >= limit_ ||
+            chunk > limit_ - physical)
+            return kIOReturnUnsupported;
+        if(spans_used &&
+            physical == spans[spans_used - 1].physical + spans[spans_used - 1].bytes) {
+            spans[spans_used - 1].bytes += chunk;
+        } else {
+            if(spans_used == NativeMaliMemoryMaxSpans)return kIOReturnNoResources;
+            spans[spans_used].offset = offset;
+            spans[spans_used].physical = physical;
+            spans[spans_used].bytes = chunk;
+            ++spans_used;
+        }
+        offset += chunk;
+    }
+    *count = spans_used;
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
+    void **cpu, NativeMaliMemorySpan *spans, size_t *count)
+{
+    if(!cpu || !spans || !count)return kIOReturnBadArgument;
+    if(!owningTask_)return kIOReturnNotReady;
+    if(userAddress == 0 || (userAddress & (NativeMaliVmGranule - 1)) ||
+        bytes == 0 || (bytes % NativeMaliVmGranule) != 0 || bytes > limit_)
+        return kIOReturnBadArgument;
+
+    Entry *slot = nullptr;
+    for(auto &entry : entry_)
+        if(!entry.descriptor) { slot = &entry; break; }
+    if(!slot)return kIOReturnNoResources;
+
+    IOMemoryDescriptor *descriptor = IOMemoryDescriptor::withAddressRange(
+        static_cast<mach_vm_address_t>(userAddress),
+        static_cast<mach_vm_size_t>(bytes),
+        static_cast<IOOptionBits>(kIODirectionInOut), owningTask_);
+    if(!descriptor)return kIOReturnBadArgument;
+
+    IOReturn status = descriptor->prepare();
+    if(status != kIOReturnSuccess) {
+        descriptor->release();
+        return status;
+    }
+
+    /* Map into kernel VA with default (WB) attributes matching the caller's
+     * IOSurface / host allocation so EL1 cache maintenance avoids ARM64
+     * mismatched memory attributes. */
+    IOMemoryMap *kmap = descriptor->map(kIOMapAnywhere);
+    if(!kmap) {
+        (void)descriptor->complete();
+        descriptor->release();
+        return kIOReturnNoMemory;
+    }
+    void *mapping = reinterpret_cast<void *>(kmap->getVirtualAddress());
+    size_t spans_used = 0;
+    if(!mapping || (reinterpret_cast<uintptr_t>(mapping) & (NativeMaliVmGranule - 1)) ||
+        kmap->getLength() < bytes || descriptor->getLength() != bytes) {
+        status = kIOReturnUnsupported;
+        goto failed;
+    }
+
+    status = walkSpans(descriptor, bytes, spans, &spans_used);
+    if(status != kIOReturnSuccess)goto failed;
+
+    slot->cpu = mapping;
+    slot->descriptor = descriptor;
+    slot->kernelMap = kmap;
+    slot->bytes = bytes;
+    *cpu = mapping;
+    *count = spans_used;
+    return kIOReturnSuccess;
+
+failed:
+    kmap->release();
+    (void)descriptor->complete();
+    descriptor->release();
+    return status;
+}
+
 void NativeMaliXnuBuffers::release(void *cpu, const NativeMaliMemorySpan *,
     size_t)
 {
     if(!cpu)return;
     for(auto &entry : entry_) {
         if(entry.cpu != cpu || !entry.descriptor)continue;
-        IOBufferMemoryDescriptor *descriptor = entry.descriptor;
+        IOMemoryDescriptor *descriptor = entry.descriptor;
+        IOMemoryMap *kmap = entry.kernelMap;
         entry = Entry{};
+        if(kmap)kmap->release();
         const IOReturn status = descriptor->complete();
         if(status != kIOReturnSuccess) {
             IOLog("NativeMali: buffer complete failed 0x%x, leaking %lu bytes\n",

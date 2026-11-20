@@ -126,6 +126,13 @@ public:
         return kIOReturnSuccess;
     }
 
+    IOReturn importHost(uint64_t userAddress, size_t bytes, void **cpu,
+        NativeMaliMemorySpan *spans, size_t *count) override
+    {
+        (void)userAddress;
+        return alloc(bytes, cpu, spans, count);
+    }
+
     void release(void *cpu, const NativeMaliMemorySpan *spans,
         size_t count) override
     {

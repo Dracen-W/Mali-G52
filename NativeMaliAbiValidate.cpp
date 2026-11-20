@@ -75,6 +75,34 @@ IOReturn NativeMaliAbiValidate::boCpuUnmap(const NativeMaliAbiBoCpuUnmap &unmap)
     return kIOReturnSuccess;
 }
 
+IOReturn NativeMaliAbiValidate::boImportHost(
+    const NativeMaliAbiBoImportHost &req, uint64_t maxBytes)
+{
+    if(req.flags != 0)return kIOReturnUnsupported;
+    if(req.reserved != 0)return kIOReturnBadArgument;
+    if(req.address == 0 || (req.address % kPage) != 0)
+        return kIOReturnBadArgument;
+    if(req.bytes == 0 || (req.bytes % kPage) != 0)
+        return kIOReturnBadArgument;
+    if(req.address > UINT64_MAX - req.bytes)return kIOReturnBadArgument;
+    if(maxBytes != 0 && req.bytes > maxBytes)return kIOReturnNoResources;
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliAbiValidate::boSync(const NativeMaliAbiBoSync &req,
+    uint64_t boBytes)
+{
+    if(req.handle == 0 || req.reserved != 0 || req.bytes == 0)
+        return kIOReturnBadArgument;
+    if(req.op != NativeMaliBoSyncClean &&
+        req.op != NativeMaliBoSyncInvalidate &&
+        req.op != NativeMaliBoSyncCleanInvalidate)
+        return kIOReturnUnsupported;
+    if(req.offset > boBytes || req.bytes > boBytes - req.offset)
+        return kIOReturnBadArgument;
+    return kIOReturnSuccess;
+}
+
 IOReturn NativeMaliAbiValidate::submit(const NativeMaliAbiSubmit &submit)
 {
     if(submit.flags != 0)return kIOReturnUnsupported;

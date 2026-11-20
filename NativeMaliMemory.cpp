@@ -23,6 +23,30 @@ NativeMaliMemory::~NativeMaliMemory()
     reset();
 }
 
+namespace {
+
+IOReturn validateSpans(void *cpu, const NativeMaliMemorySpan *spans,
+    size_t count, size_t bytes)
+{
+    if(!cpu || count == 0 || count > NativeMaliMemoryMaxSpans)
+        return kIOReturnBadArgument;
+    uint64_t expected = 0;
+    for(size_t i = 0; i < count; ++i) {
+        const NativeMaliMemorySpan &span = spans[i];
+        if(!span.bytes || span.offset != expected ||
+            (span.offset & (NativeMaliVmGranule - 1)) ||
+            (span.bytes & (NativeMaliVmGranule - 1)) ||
+            (span.physical & (NativeMaliVmGranule - 1)) ||
+            span.offset + span.bytes < span.offset ||
+            span.physical + span.bytes < span.physical)
+            return kIOReturnBadArgument;
+        expected += span.bytes;
+    }
+    return expected == bytes ? kIOReturnSuccess : kIOReturnBadArgument;
+}
+
+} // namespace
+
 IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     bool cpuCoherent, NativeMaliCacheMaintainer *maintainer)
 {
@@ -48,26 +72,7 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
         return result;
     }
 
-    /* The span list must describe the buffer exactly: page-aligned runs, in
-     * offset order, with no gap and no overlap. Anything else is a backend bug
-     * that would map the wrong physical page, so refuse and give the
-     * allocation back. */
-    IOReturn bad = kIOReturnSuccess;
-    if(!cpu || count == 0 || count > NativeMaliMemoryMaxSpans)bad = kIOReturnBadArgument;
-    uint64_t expected = 0;
-    for(size_t i = 0; bad == kIOReturnSuccess && i < count; ++i) {
-        const NativeMaliMemorySpan &span = spans[i];
-        if(!span.bytes || span.offset != expected ||
-            (span.offset & (NativeMaliVmGranule - 1)) ||
-            (span.bytes & (NativeMaliVmGranule - 1)) ||
-            (span.physical & (NativeMaliVmGranule - 1)) ||
-            span.offset + span.bytes < span.offset ||
-            span.physical + span.bytes < span.physical)
-            bad = kIOReturnBadArgument;
-        else
-            expected += span.bytes;
-    }
-    if(bad == kIOReturnSuccess && expected != bytes)bad = kIOReturnBadArgument;
+    IOReturn bad = validateSpans(cpu, spans, count, bytes);
     if(bad != kIOReturnSuccess) {
         source->release(cpu, spans, count);
         IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
@@ -75,6 +80,68 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     }
 
     /* Shrink storage to the exact span count so small BOs only hold a few entries. */
+    NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
+    if(compact) {
+        memcpy(compact, spans, count * sizeof(spans[0]));
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        span_ = compact;
+        spanCap_ = count;
+    } else {
+        span_ = spans;
+        spanCap_ = NativeMaliMemoryMaxSpans;
+    }
+    spans_ = count;
+    cpu_ = cpu;
+    bytes_ = bytes;
+    coherent_ = cpuCoherent;
+    maintainer_ = maintainer;
+    source_ = source;
+    prepared_ = true;
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliMemory::prepareImported(NativeMaliMemorySource *source,
+    uint64_t userAddress, size_t bytes, bool cpuCoherent,
+    NativeMaliCacheMaintainer *maintainer)
+{
+    if(prepared_)return kIOReturnBusy;
+    if(!source || !userAddress || !bytes)return kIOReturnBadArgument;
+    if((userAddress & (NativeMaliVmGranule - 1)) ||
+        (bytes & (NativeMaliVmGranule - 1)))
+        return kIOReturnBadArgument;
+    if(!cpuCoherent && !maintainer)return kIOReturnBadArgument;
+
+    NativeMaliMemorySpan *spans = IONewData(NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+    if(!spans)return kIOReturnNoMemory;
+    memset(spans, 0, sizeof(NativeMaliMemorySpan) * NativeMaliMemoryMaxSpans);
+    void *cpu = nullptr;
+    size_t count = 0;
+    IOReturn result = source->importHost(userAddress, bytes, &cpu, spans, &count);
+    if(result != kIOReturnSuccess) {
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        return result;
+    }
+
+    IOReturn bad = validateSpans(cpu, spans, count, bytes);
+    if(bad != kIOReturnSuccess) {
+        source->release(cpu, spans, count);
+        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        return bad;
+    }
+
+    /* On a non-coherent GPU, flush any dirty CPU cache lines from the caller's
+     * WB-cached allocation (e.g. IOSurface) to PoC and drop them so later CPU
+     * evictions cannot clobber GPU output. */
+    if(!cpuCoherent) {
+        const IOReturn sync = maintainer->maintain(cpu, bytes,
+            NativeMaliCacheCleanInvalidate);
+        if(sync != kIOReturnSuccess) {
+            source->release(cpu, spans, count);
+            IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+            return sync;
+        }
+    }
+
     NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
     if(compact) {
         memcpy(compact, spans, count * sizeof(spans[0]));
@@ -207,4 +274,14 @@ IOReturn NativeMaliMemory::invalidateForCpu(size_t offset, size_t bytes)
     if(!bytes || coherent_)return kIOReturnSuccess;
     return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset, bytes,
         NativeMaliCacheInvalidate);
+}
+
+IOReturn NativeMaliMemory::cleanInvalidate(size_t offset, size_t bytes)
+{
+    if(!prepared_)return kIOReturnNotReady;
+    IOReturn result = checkBufferRange(bytes_, offset, bytes);
+    if(result != kIOReturnSuccess)return result;
+    if(!bytes || coherent_)return kIOReturnSuccess;
+    return maintainer_->maintain(static_cast<uint8_t *>(cpu_) + offset, bytes,
+        NativeMaliCacheCleanInvalidate);
 }

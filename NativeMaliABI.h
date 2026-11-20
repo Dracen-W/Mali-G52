@@ -103,7 +103,11 @@ enum {
     NativeMaliMethodGetStatus = 10,
     /* Device-wide recovery. No records exist for it. */
     NativeMaliMethodReset = 11,
-    NativeMaliMethodLast = NativeMaliMethodReset,
+    /* Zero-copy host memory import (VK_EXT_external_memory_host / IOSurface). */
+    NativeMaliMethodBoImportHost = 12,
+    /* Explicit EL1 cache maintenance on a BO subrange (non-coherent Mali-G52). */
+    NativeMaliMethodBoSync = 13,
+    NativeMaliMethodLast = NativeMaliMethodBoSync,
 
     /* The single page size the MMU layer maps. */
     NativeMaliAbiPageBytes = 4096,
@@ -250,6 +254,33 @@ struct NativeMaliAbiStatus {
     uint64_t resets;
 };
 
+/* Pin a caller-owned host allocation (e.g. IOSurface or Metal no-copy buffer)
+ * zero-copy into a BO handle that shares the BoMap / BoFree / BoSync space. */
+struct NativeMaliAbiBoImportHost {
+    uint64_t address;             /* caller's user VA, nonzero, 4 KiB aligned */
+    uint64_t bytes;               /* nonzero multiple of 4 KiB, <= max_bo_bytes */
+    uint32_t flags;               /* zero; unknown bits are refused */
+    uint32_t reserved;            /* zero */
+};
+struct NativeMaliAbiBoImportHostReply {
+    uint64_t handle;              /* opaque, nonzero */
+};
+
+/* Cache maintenance on a live BO subrange for non-coherent Mali-G52 (Darwin EL0
+ * traps DC CVAC/CIVAC, so pan_kmod routes WB-mapped syncs through EL1). */
+enum {
+    NativeMaliBoSyncClean = 1,          /* CPU -> GPU (dc cvac) */
+    NativeMaliBoSyncInvalidate = 2,     /* GPU -> CPU (dc ivac, page-aligned) */
+    NativeMaliBoSyncCleanInvalidate = 3 /* flush + invalidate (dc civac) */
+};
+struct NativeMaliAbiBoSync {
+    uint64_t handle;              /* live BO handle */
+    uint64_t offset;              /* byte offset inside the BO */
+    uint64_t bytes;               /* nonzero length; offset + bytes <= bo bytes */
+    uint32_t op;                  /* NativeMaliBoSyncClean/Invalidate/CleanInvalidate */
+    uint32_t reserved;            /* zero */
+};
+
 #if defined(__cplusplus)
 static_assert(sizeof(NativeMaliAbiQuery) == 24, "Mali ABI query layout");
 static_assert(sizeof(NativeMaliAbiDeviceInfo) == NativeMaliAbiDeviceInfoBytes,
@@ -268,5 +299,8 @@ static_assert(sizeof(NativeMaliAbiSubmit) == 32, "Mali ABI submit layout");
 static_assert(sizeof(NativeMaliAbiSubmitReply) == 8, "Mali ABI submit reply layout");
 static_assert(sizeof(NativeMaliAbiWaitFence) == 16, "Mali ABI wait layout");
 static_assert(sizeof(NativeMaliAbiStatus) == 16, "Mali ABI status layout");
+static_assert(sizeof(NativeMaliAbiBoImportHost) == 24, "Mali ABI import host layout");
+static_assert(sizeof(NativeMaliAbiBoImportHostReply) == 8, "Mali ABI import host reply layout");
+static_assert(sizeof(NativeMaliAbiBoSync) == 32, "Mali ABI bo sync layout");
 #endif
 #endif

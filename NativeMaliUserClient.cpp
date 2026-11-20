@@ -85,6 +85,18 @@ IOReturn NativeMaliUserClient::cpuUnmap(const NativeMaliAbiBoCpuUnmap &request)
     return bo_.cpuUnmap(request);
 }
 
+IOReturn NativeMaliUserClient::importHostBo(
+    const NativeMaliAbiBoImportHost &request,
+    NativeMaliAbiBoImportHostReply *reply)
+{
+    return bo_.importHost(request, reply);
+}
+
+IOReturn NativeMaliUserClient::syncBo(const NativeMaliAbiBoSync &request)
+{
+    return bo_.syncBo(request);
+}
+
 IOReturn NativeMaliUserClient::query(const NativeMaliAbiQuery &request,
     NativeMaliAbiQuery *reply)
 {
@@ -288,6 +300,8 @@ size_t NativeMaliUserClient::inputSize(uint32_t method)
     case NativeMaliMethodWaitFence: return sizeof(NativeMaliAbiWaitFence);
     case NativeMaliMethodGetStatus: return 0;
     case NativeMaliMethodReset: return 0;
+    case NativeMaliMethodBoImportHost: return sizeof(NativeMaliAbiBoImportHost);
+    case NativeMaliMethodBoSync: return sizeof(NativeMaliAbiBoSync);
     default: return kUnsupportedSize;
     }
 }
@@ -306,6 +320,8 @@ size_t NativeMaliUserClient::outputSize(uint32_t method)
     case NativeMaliMethodWaitFence: return 0;
     case NativeMaliMethodGetStatus: return sizeof(NativeMaliAbiStatus);
     case NativeMaliMethodReset: return 0;
+    case NativeMaliMethodBoImportHost: return sizeof(NativeMaliAbiBoImportHostReply);
+    case NativeMaliMethodBoSync: return 0;
     default: return kUnsupportedSize;
     }
 }
@@ -414,6 +430,20 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
          * GPU by itself, and a missing target is not a silent success. */
         if(!open_)return kIOReturnNotReady;
         return reset_ ? reset_->resetDevice() : kIOReturnUnsupported;
+    case NativeMaliMethodBoImportHost: {
+        NativeMaliAbiBoImportHost request{};
+        memcpy(&request, input, sizeof(request));
+        NativeMaliAbiBoImportHostReply reply{};
+        const IOReturn result = importHostBo(request, &reply);
+        if(result != kIOReturnSuccess)return result;
+        memcpy(output, &reply, sizeof(reply));
+        return kIOReturnSuccess;
+    }
+    case NativeMaliMethodBoSync: {
+        NativeMaliAbiBoSync request{};
+        memcpy(&request, input, sizeof(request));
+        return syncBo(request);
+    }
     default:
         /* inputSize()/outputSize() already rejected every other selector. */
         return kIOReturnUnsupported;

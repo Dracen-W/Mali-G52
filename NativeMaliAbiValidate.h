@@ -38,6 +38,9 @@ public:
     static IOReturn boMap(const NativeMaliAbiBoMap &map, uint64_t boBytes);
     static IOReturn boCpuMap(const NativeMaliAbiBoCpuMap &map);
     static IOReturn boCpuUnmap(const NativeMaliAbiBoCpuUnmap &unmap);
+    static IOReturn boImportHost(const NativeMaliAbiBoImportHost &req,
+        uint64_t maxBytes);
+    static IOReturn boSync(const NativeMaliAbiBoSync &req, uint64_t boBytes);
 
     /* The chain must be where the hardware expects a job header, and a wait
      * with no fence cannot have a timeout. */

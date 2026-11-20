@@ -76,6 +76,18 @@ public:
     /* `spans` holds NativeMaliMemoryMaxSpans entries. */
     virtual IOReturn alloc(size_t bytes, void **cpu, NativeMaliMemorySpan *spans,
         size_t *count) = 0;
+    /* Pin a caller-owned user virtual range zero-copy. Default returns
+     * kIOReturnUnsupported for sources that only support driver allocations. */
+    virtual IOReturn importHost(uint64_t userAddress, size_t bytes, void **cpu,
+        NativeMaliMemorySpan *spans, size_t *count)
+    {
+        (void)userAddress;
+        (void)bytes;
+        (void)cpu;
+        (void)spans;
+        (void)count;
+        return kIOReturnUnsupported;
+    }
     virtual void release(void *cpu, const NativeMaliMemorySpan *spans,
         size_t count) = 0;
 };
@@ -111,6 +123,9 @@ public:
      * reset() returns kIOReturnBusy. */
     IOReturn prepare(NativeMaliMemorySource *source, size_t bytes,
         bool cpuCoherent, NativeMaliCacheMaintainer *maintainer);
+    IOReturn prepareImported(NativeMaliMemorySource *source,
+        uint64_t userAddress, size_t bytes, bool cpuCoherent,
+        NativeMaliCacheMaintainer *maintainer);
     /* Give the allocation back, whether or not it is mapped, and forget every
      * mapping without touching a register. The owner calls this after the
      * address space is gone; release() is the checked form. */
@@ -150,5 +165,6 @@ public:
      * buffer; the maintainer sees the unchanged length. */
     IOReturn cleanForDevice(size_t offset, size_t bytes);
     IOReturn invalidateForCpu(size_t offset, size_t bytes);
+    IOReturn cleanInvalidate(size_t offset, size_t bytes);
 };
 #endif

@@ -62,6 +62,7 @@ class NativeMaliBoTable final {
         bool live = false;
         bool mapped = false;
         bool cpuMapped = false;
+        bool imported = false;
     };
     Slot slot_[NativeMaliBoTableCapacity];
     NativeMaliHandleIndex<NativeMaliBoTableCapacity> index_; /* handle -> slot */
@@ -112,6 +113,9 @@ public:
     IOReturn cpuMap(const NativeMaliAbiBoCpuMap &request,
         NativeMaliAbiBoCpuMapReply *reply);
     IOReturn cpuUnmap(const NativeMaliAbiBoCpuUnmap &request);
+    IOReturn importHost(const NativeMaliAbiBoImportHost &request,
+        NativeMaliAbiBoImportHostReply *reply);
+    IOReturn syncBo(const NativeMaliAbiBoSync &request);
 
     /* Connection teardown: drop every CPU token, then free every live object in
      * slot order. The first failure stops the walk and leaves the rest live;

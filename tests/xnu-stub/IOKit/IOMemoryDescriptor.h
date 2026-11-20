@@ -3,9 +3,15 @@
 #ifndef NATIVE_MALI_STUB_IOMEMORYDESCRIPTOR_H
 #define NATIVE_MALI_STUB_IOMEMORYDESCRIPTOR_H
 #include <IOKit/IOService.h>
+#include <kern/task.h>
+
+class IOMemoryMap;
 
 class IOMemoryDescriptor : public OSObject {
 public:
+    static IOMemoryDescriptor *withAddressRange(mach_vm_address_t address,
+        mach_vm_size_t length, IOOptionBits options, task_t task);
+    virtual IOMemoryMap *map(IOOptionBits options = 0);
     virtual void retain() const override;
     virtual void release() const override;
     virtual IOReturn prepare();
