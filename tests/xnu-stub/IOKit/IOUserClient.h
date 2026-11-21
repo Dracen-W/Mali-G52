@@ -13,7 +13,7 @@ struct IOExternalMethodArguments {
 };
 
 struct IOExternalMethodDispatch {
-    IOReturn (*action)(OSObject *target, void *reference,
+    IOReturn (*function)(OSObject *target, void *reference,
         IOExternalMethodArguments *arguments);
     uint32_t checkScalarInputCount;
     uint32_t checkStructureInputSize;

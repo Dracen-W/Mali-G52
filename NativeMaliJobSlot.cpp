@@ -164,13 +164,6 @@ IOReturn NativeMaliJobSlot::waitForCompletion(uint32_t js,
     completion->rawStatus = status;
 
     if(status & errorBit) {
-        /* panfrost_job_handle_err() (panfrost_job.c:454-470) reads JS_STATUS for
-         * the reason, and panfrost_jm_handle_irq() (panfrost_job.c:544-550)
-         * cancels the staged next command. Both are repeated by a retry if one
-         * of them fails, which is why outstanding_ is only cleared at the end.
-         * STOPPED (a resumable stop the source restarts from JS_TAIL) is
-         * reported, not resumed: this driver has no job object to rewind and no
-         * reset path to call yet, so the slot is latched instead. */
         result = registers_->read32(JS_STATUS(js), &completion->jsStatus);
         if(result != kIOReturnSuccess)return result;
         result = registers_->write32(JS_COMMAND_NEXT(js), JS_COMMAND_NOP);
@@ -179,15 +172,36 @@ IOReturn NativeMaliJobSlot::waitForCompletion(uint32_t js,
         if(result != kIOReturnSuccess)return result;
         outstanding_[js] = false;
         faulted_[js] = true;
-        /* A faulted job still reaps its fence: the wait is over, the reason is
-         * in the completion. */
         completedSeqno_[js] = emitSeqno_[js];
         return kIOReturnIOError;
     }
 
-    /* DONE: clear only this slot's bit. The source clears the whole word it
-     * read, but it samples JS_STATE under that write and owns every slot;
-     * another slot's event is somebody else's completion here. */
+    result = registers_->write32(JOB_INT_CLEAR, doneBit);
+    if(result != kIOReturnSuccess)return result;
+    outstanding_[js] = false;
+    completedSeqno_[js] = emitSeqno_[js];
+    return kIOReturnSuccess;
+}
+
+IOReturn NativeMaliJobSlot::reapIfDone(uint32_t js)
+{
+    if(!prepared() || !kWriteAuthorized || jsPresent_ == 0)
+        return kIOReturnNotReady;
+    if(js >= NativeMaliJobSlotCount || (jsPresent_ & (1u << js)) == 0)
+        return kIOReturnBadArgument;
+    if(!outstanding_[js])return kIOReturnSuccess;
+
+    IOReturn result = power_->gpuReadable();
+    if(result != kIOReturnSuccess)return result;
+
+    const uint32_t doneBit = JOB_INT_MASK_DONE(js);
+    const uint32_t errorBit = JOB_INT_MASK_ERR(js);
+    uint32_t status = 0;
+    result = registers_->read32(JOB_INT_RAWSTAT, &status);
+    if(result != kIOReturnSuccess)return result;
+    /* Never steal an ERR completion; leave it for the owning client's wait. */
+    if((status & errorBit) || !(status & doneBit))return kIOReturnBusy;
+
     result = registers_->write32(JOB_INT_CLEAR, doneBit);
     if(result != kIOReturnSuccess)return result;
     outstanding_[js] = false;
@@ -199,8 +213,6 @@ IOReturn NativeMaliJobSlot::resetInterrupts()
 {
     if(!prepared())return kIOReturnNotReady;
     if(!kWriteAuthorized)return kIOReturnUnsupported;
-    /* Same rule as submit(): do not touch a job register before GPU_JS_PRESENT
-     * is known. The source's call site is after panfrost_jm_init(). */
     if(jsPresent_ == 0)return kIOReturnNotReady;
     IOReturn result = power_->gpuReadable();
     if(result != kIOReturnSuccess)return result;
@@ -215,8 +227,6 @@ IOReturn NativeMaliJobSlot::quiesce()
     IOReturn result = power_->gpuReadable();
     if(result != kIOReturnSuccess)return result;
 
-    /* panfrost_job.c:697-701: cancel the staged next command, then soft-stop the
-     * running one, in that order on each slot. */
     for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js) {
         if((jsPresent_ & (1u << js)) == 0)continue;
         result = registers_->write32(JS_COMMAND_NEXT(js), JS_COMMAND_NOP);
@@ -225,10 +235,6 @@ IOReturn NativeMaliJobSlot::quiesce()
         if(result != kIOReturnSuccess)return result;
     }
 
-    /* panfrost_active_slots() (panfrost_job.c:637-656) under
-     * readl_poll_timeout() (:704-706). The mask survives across polls: one
-     * DONE/ERR event retires that slot for the rest of the wait, even if
-     * JS_STATE has not caught up yet. */
     uint32_t activeMask = 0xFFFFFFFFu;
     uint32_t jsState = 0;
     uint64_t waited = 0;
@@ -242,10 +248,6 @@ IOReturn NativeMaliJobSlot::quiesce()
             for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js)
                 if(rawstat & MK_JS_MASK(js))activeMask &= ~MK_JS_MASK(js);
         }
-        /* Note: the source passes NUM_JOB_SLOTS to the clearing loop, so a
-         * JS_STATE bit outside the three slots would keep the poll alive until
-         * the timeout. Hardware only reports the slots it has, and this driver
-         * has already checked GPU_JS_PRESENT, so the same rule is used. */
         if((jsState & activeMask) == 0)return kIOReturnSuccess;
         if(waited >= SoftStopTimeoutUs)return kIOReturnTimeout;
         result = registers_->delay(SoftStopPollUs);
@@ -256,9 +258,6 @@ IOReturn NativeMaliJobSlot::quiesce()
 
 void NativeMaliJobSlot::abandonOutstanding()
 {
-    /* No registers: the reset already destroyed the hardware state. The seqnos
-     * stay, because a fence is only ever compared and the source does not
-     * rewind emit_seqno. */
     for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js) {
         outstanding_[js] = false;
         faulted_[js] = false;

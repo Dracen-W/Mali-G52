@@ -49,8 +49,9 @@
 #include <stdint.h>
 
 /* Live objects per client. The table is fixed storage; alloc() reports
- * kIOReturnNoResources past it rather than growing. */
-enum : size_t { NativeMaliBoTableCapacity = 4096 };
+ * kIOReturnNoResources past it rather than growing. Must be a power of two for
+ * NativeMaliHandleIndex. */
+enum : size_t { NativeMaliBoTableCapacity = 8192 };
 
 class NativeMaliBoTable final {
     struct Slot {
@@ -66,6 +67,16 @@ class NativeMaliBoTable final {
     };
     Slot slot_[NativeMaliBoTableCapacity];
     NativeMaliHandleIndex<NativeMaliBoTableCapacity> index_; /* handle -> slot */
+    /* Lowest-index-first free-slot bitmap (1 bit per slot = 1 KiB). */
+    enum : size_t { kBitmapWords = (NativeMaliBoTableCapacity + 63) / 64 };
+    uint64_t freeBitmap_[kBitmapWords]{};
+    size_t freeHintWord_ = 0;
+    /* Mapped slot indices kept sorted by slot_[idx].iova for O(log M)
+     * rangeTaken(), covers(), and readJobType() lookups. */
+    uint32_t mappedSlots_[NativeMaliBoTableCapacity]{};
+    size_t mappedCount_ = 0;
+    /* O(1) fast-path cache for the most recently used job-chain BO slot. */
+    uint32_t lastJobSlot_ = UINT32_MAX;
     size_t live_ = 0;
     uint64_t nextHandle_ = 1;
 
@@ -80,7 +91,13 @@ class NativeMaliBoTable final {
 
     Slot *find(uint64_t handle);
     const Slot *find(uint64_t handle) const;
-    Slot *freeSlot();
+    Slot *acquireFreeSlot();
+    void returnFreeSlot(uint32_t slotIndex);
+    void insertMappedSlot(uint32_t slotIndex);
+    void removeMappedSlot(uint32_t slotIndex);
+    size_t lowerBoundIova(uint64_t iova) const;
+    const Slot *findCoveringSlot(uint64_t start, uint64_t bytes) const;
+    Slot *findCoveringSlot(uint64_t start, uint64_t bytes);
     bool rangeTaken(uint64_t iova, uint64_t bytes) const;
     void clear(Slot &slot);
 public:
@@ -134,6 +151,8 @@ public:
     bool readJobType(uint64_t start, uint64_t bytes, uint32_t *jobType);
     bool mapped(uint64_t handle) const;
     bool coherent() const { return coherent_; }
+    /* O(1) slot index lookup for a live handle (UINT32_MAX if unknown). */
+    uint32_t slotIndexForHandle(uint64_t handle) const;
     /* The backing object of a live handle, for the wrapper and for kernel
      * self-tests; null for an unknown handle. The table keeps ownership. */
     NativeMaliMemory *memory(uint64_t handle);

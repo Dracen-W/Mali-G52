@@ -159,7 +159,13 @@ bool NativeMaliUserClient::chooseSlot(uint32_t *slot)
         if((jobs_->present() & (1u << js)) == 0)continue;
         /* A faulted slot needs a GPU reset and clearFault() first; neither is
          * this object's to do. */
-        if(jobs_->outstanding(js) || jobs_->faulted(js))continue;
+        if(jobs_->faulted(js))continue;
+        if(jobs_->outstanding(js)) {
+            /* If another client's job already finished on hardware, reap its
+             * DONE bit so this client is not stalled waiting for them. */
+            if(ownOutstanding(js) || jobs_->reapIfDone(js) != kIOReturnSuccess)
+                continue;
+        }
         *slot = js;
         return true;
     }
@@ -178,21 +184,10 @@ IOReturn NativeMaliUserClient::waitForFence(const NativeMaliFence &fence,
     if(!open_)return kIOReturnNotReady;
     if(!fence.valid() || fence.js >= NativeMaliJobSlotCount)
         return kIOReturnBadArgument;
-    /* Only a fence this client was handed can be waited on. A higher seqno is
-     * another client's newest job (or one not submitted yet), and reaping it
-     * here would steal its completion and hide its error. */
     if(fence.seqno > submitted_[fence.js])return kIOReturnBadArgument;
-    /* Destroyed by a GPU reset without a completion. This is the error fence
-     * panfrost would have signaled; it is not a fault, so only the reset
-     * counter moved. */
     if(deadSeqno_[fence.js] == fence.seqno)return kIOReturnIOError;
-    /* Already reaped: an older own fence, or another client's earlier job on
-     * the same slot, which this client's later job had to wait for anyway. */
     if(jobs_->fenceSignaled(fence))return kIOReturnSuccess;
 
-    /* Not signaled, so this must be the slot's newest submission, and it must
-     * still be outstanding. Anything else is a bookkeeping bug; refuse rather
-     * than wait on a slot that could belong to someone else. */
     if(jobs_->latestSeqno(fence.js) != fence.seqno)return kIOReturnNotReady;
     if(!jobs_->outstanding(fence.js))return kIOReturnNotReady;
 
@@ -228,10 +223,6 @@ IOReturn NativeMaliUserClient::submit(const NativeMaliAbiSubmit &request,
 
     IOReturn result = NativeMaliAbiValidate::submit(request);
     if(result != kIOReturnSuccess)return result;
-    /* The chain head must be an address this client mapped: the hardware will
-     * fetch 64 bytes there, and an unmapped address is a GPU fault. Read the
-     * v7 job header type (word 4 bits 7:1) so Fragment (9) runs on JS0 and
-     * Vertex/Tiler/Compute run on JS1 (panfrost_job_get_slot()). */
     uint32_t jobType = 0;
     if(!bo_.readJobType(request.job_chain, NativeMaliJobHeadAlignment, &jobType))
         return kIOReturnBadArgument;
@@ -254,6 +245,11 @@ IOReturn NativeMaliUserClient::submit(const NativeMaliAbiSubmit &request,
                 const NativeMaliFence own{preferred, submitted_[preferred]};
                 result = waitForFence(own, UINT64_C(5000000000), nullptr);
                 if(result != kIOReturnSuccess)return result;
+            } else if(jobs_->outstanding(preferred)) {
+                /* Reap another client's completed DONE job without blocking so
+                 * cross-client IPC (e.g. SpringBoard/Preferences -> backboardd)
+                 * cannot deadlock for 5 seconds waiting on WaitFence. */
+                (void)jobs_->reapIfDone(preferred);
             }
             if(jobs_->outstanding(preferred))return kIOReturnBusy;
             slot = preferred;
@@ -348,8 +344,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
         return kIOReturnUnsupported;
     if(input_size != expected_in)
         return kIOReturnBadArgument;
-    /* GetDeviceInfo accepts the v1 record as well: v2 is a strict prefix
-     * extension, and the caller's buffer size says which it wants. */
     if(method == NativeMaliMethodGetDeviceInfo) {
         if(output_size != NativeMaliAbiDeviceInfoV1Bytes &&
             output_size != expected_out)
@@ -360,8 +354,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
     if((expected_in != 0 && !input) || (expected_out != 0 && !output))
         return kIOReturnBadArgument;
 
-    /* Every reply is built in a zeroed local and copied out only after the
-     * typed method succeeds; a refusal leaves the caller's buffer untouched. */
     switch(method) {
     case NativeMaliMethodQuery: {
         NativeMaliAbiQuery request{};
@@ -376,7 +368,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
         NativeMaliAbiDeviceInfo reply{};
         const IOReturn result = deviceInfo(&reply);
         if(result != kIOReturnSuccess)return result;
-        /* v1 callers asked for 64 bytes; copy exactly what they asked for. */
         memcpy(output, &reply, output_size);
         return kIOReturnSuccess;
     }
@@ -439,8 +430,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
         return kIOReturnSuccess;
     }
     case NativeMaliMethodReset:
-        /* The target is the device-wide owner; this client cannot reset the
-         * GPU by itself, and a missing target is not a silent success. */
         if(!open_)return kIOReturnNotReady;
         return reset_ ? reset_->resetDevice() : kIOReturnUnsupported;
     case NativeMaliMethodBoImportHost: {
@@ -458,7 +447,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
         return syncBo(request);
     }
     default:
-        /* inputSize()/outputSize() already rejected every other selector. */
         return kIOReturnUnsupported;
     }
 }
@@ -466,15 +454,6 @@ IOReturn NativeMaliUserClient::dispatch(uint32_t method, const void *input,
 void NativeMaliUserClient::noteReset()
 {
     if(!open_)return;
-    /* latest > completed means the job was never reaped, so the reset killed
-     * it; `<= submitted_` means it was this client's job and not another
-     * client's later submission on the shared slot. Keep the seqno: a later
-     * submission on the same slot gets a higher one, so this can only ever
-     * match the lost job.
-     *
-     * A reset that kills nothing on a slot must not clear an older marker.
-     * completedSeqno_ only moves forward, so a fence this slot lost once would
-     * otherwise later look like an ordinary reaped fence and answer Success. */
     for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js) {
         const uint32_t latest = jobs_->latestSeqno(js);
         if(latest > jobs_->completedSeqno(js) && latest <= submitted_[js])
@@ -486,11 +465,6 @@ void NativeMaliUserClient::noteReset()
 IOReturn NativeMaliUserClient::abandon()
 {
     if(!open_)return kIOReturnNotReady;
-    /* panfrost_mmu_release_ctx() does not disable an address space whose
-     * device is not runtime-active (panfrost_mmu.c:731-732). The service makes
-     * the same decision for the same reason: an unreadable block cannot still
-     * walk this client's tables, so the leaves and the flush are skipped and
-     * the buffers go straight back to their source. */
     bo_.reset();
     open_ = false;
     return kIOReturnSuccess;
@@ -499,8 +473,6 @@ IOReturn NativeMaliUserClient::abandon()
 IOReturn NativeMaliUserClient::close()
 {
     if(!open_)return kIOReturnNotReady;
-    /* Live objects or unobserved jobs are still owned by userspace; closing
-     * would retire them behind its back. */
     if(bo_.live() != 0)return kIOReturnBusy;
     for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js)
         if(ownOutstanding(js))return kIOReturnBusy;
@@ -514,9 +486,6 @@ IOReturn NativeMaliUserClient::releaseAll(uint64_t timeout_us)
 {
     if(!open_)return kIOReturnNotReady;
 
-    /* Wait for this client's jobs first, so no chain can still read a buffer
-     * that is about to be unmapped. A slotted job that is not ours is left
-     * alone: another client owns its completion. */
     for(uint32_t js = 0; js < NativeMaliJobSlotCount; ++js) {
         if(!ownOutstanding(js))continue;
         NativeMaliJobCompletion completion;

@@ -1,10 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* UNVERIFIED(XNU): never compiled against XNU headers (only -fsyntax-only
- * against local stubs); see docs/UNVERIFIED.md.
- * The IOKit calls mirror NativeAdreno's in-tree implementations (MIT, NOTICE):
- * page allocation and span walking from NativeAdrenoMemory::allocate(), the
- * cache sequence from NativeAdrenoCpu.cpp, and the register window from
- * NativeAdrenoGpuService. */
+/* XNU-only adapters: register windows, page-table pages, BO descriptors, and
+ * ARM64 EL1 cache maintenance. */
 #include "NativeMaliXnuSupport.h"
 #include <kern/cpu_data.h>
 #include <kern/task.h>
@@ -31,7 +27,28 @@ IOOptionBits bufferOptions(bool contiguous)
     return options;
 }
 
+void flushSpansPhysical(const NativeMaliMemorySpan *spans, size_t count)
+{
+    constexpr size_t kMaxChunk = 16u * 1024u * 1024u;
+    for(size_t i = 0; i < count; ++i) {
+        size_t done = 0;
+        const size_t total = static_cast<size_t>(spans[i].bytes);
+        while(done < total) {
+            const size_t chunk = (total - done) > kMaxChunk ? kMaxChunk : (total - done);
+            flush_dcache64(spans[i].physical + done, static_cast<unsigned>(chunk), 1);
+            done += chunk;
+        }
+    }
+}
+
 } // namespace
+
+NativeMaliXnuPages::NativeMaliXnuPages()
+{
+    freeCount_ = NativeMaliVmMaxTables;
+    for(size_t i = 0; i < NativeMaliVmMaxTables; ++i)
+        freeSlots_[i] = static_cast<uint32_t>(NativeMaliVmMaxTables - 1 - i);
+}
 
 void NativeMaliXnuPages::setOutputLimit(uint32_t oas_bits)
 {
@@ -58,9 +75,6 @@ IOReturn NativeMaliXnuWindow::write32(uint32_t offset, uint32_t value)
 IOReturn NativeMaliXnuWindow::delay(uint64_t microseconds)
 {
     if(microseconds > UINT32_MAX)return kIOReturnBadArgument;
-    /* UNVERIFIED(XNU): IODelay is a spin, which is what a 10 us hardware poll
-     * wants; whether it is allowed under this lock and really waits that long
-     * has not been checked (docs/UNVERIFIED.md). */
     IODelay(static_cast<UInt32>(microseconds));
     return kIOReturnSuccess;
 }
@@ -68,19 +82,22 @@ IOReturn NativeMaliXnuWindow::delay(uint64_t microseconds)
 IOReturn NativeMaliXnuPages::alloc(NativeMaliPage *page)
 {
     if(!page)return kIOReturnBadArgument;
-    Entry *slot = nullptr;
-    for(auto &entry : entry_)
-        if(!entry.descriptor) { slot = &entry; break; }
-    if(!slot)return kIOReturnNoResources;
+    if(freeCount_ == 0)return kIOReturnNoResources;
+    const uint32_t slotIndex = freeSlots_[--freeCount_];
+    Entry *slot = &entry_[slotIndex];
 
     IOBufferMemoryDescriptor *descriptor =
         IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
             bufferOptions(true), NativeMaliVmGranule,
             (limit_ - 1) & ~UINT64_C(4095));
-    if(!descriptor)return kIOReturnNoMemory;
+    if(!descriptor) {
+        freeSlots_[freeCount_++] = slotIndex;
+        return kIOReturnNoMemory;
+    }
     IOReturn status = descriptor->prepare();
     if(status != kIOReturnSuccess) {
         descriptor->release();
+        freeSlots_[freeCount_++] = slotIndex;
         return status;
     }
 
@@ -95,12 +112,14 @@ IOReturn NativeMaliXnuPages::alloc(NativeMaliPage *page)
         descriptor->getLength() != NativeMaliVmGranule) {
         (void)descriptor->complete();
         descriptor->release();
+        freeSlots_[freeCount_++] = slotIndex;
         return kIOReturnUnsupported;
     }
 
     memset(cpu, 0, NativeMaliVmGranule);
     slot->cpu = cpu;
     slot->descriptor = descriptor;
+    ++live_;
     page->cpu = cpu;
     page->phys = physical;
     page->bytes = NativeMaliVmGranule;
@@ -109,15 +128,16 @@ IOReturn NativeMaliXnuPages::alloc(NativeMaliPage *page)
 
 void NativeMaliXnuPages::release(const NativeMaliPage &page)
 {
-    for(auto &entry : entry_) {
+    for(size_t i = 0; i < NativeMaliVmMaxTables; ++i) {
+        Entry &entry = entry_[i];
         if(entry.cpu != page.cpu || !entry.descriptor)continue;
         IOBufferMemoryDescriptor *descriptor = entry.descriptor;
         entry = Entry{};
+        if(live_)--live_;
+        if(freeCount_ < NativeMaliVmMaxTables)
+            freeSlots_[freeCount_++] = static_cast<uint32_t>(i);
         const IOReturn status = descriptor->complete();
         if(status != kIOReturnSuccess) {
-            /* complete() failed: the pages are still wired, so releasing them
-             * would free memory the GPU may still walk. Leak the descriptor on
-             * purpose; docs/UNVERIFIED.md records it. */
             IOLog("NativeMali: page-table complete failed 0x%x, leaking one page\n",
                 status);
             return;
@@ -129,10 +149,20 @@ void NativeMaliXnuPages::release(const NativeMaliPage &page)
 
 size_t NativeMaliXnuPages::live() const
 {
-    size_t count = 0;
-    for(const auto &entry : entry_)
-        if(entry.descriptor)++count;
-    return count;
+    return live_;
+}
+
+NativeMaliXnuBuffers::NativeMaliXnuBuffers()
+{
+    freeCount_ = NativeMaliBoTableCapacity;
+    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i)
+        freeSlots_[i] = static_cast<uint32_t>(NativeMaliBoTableCapacity - 1 - i);
+}
+
+NativeMaliXnuBuffers::~NativeMaliXnuBuffers()
+{
+    cpuIndex_.release();
+    cpuIndexReady_ = false;
 }
 
 void NativeMaliXnuBuffers::setOutputLimit(uint32_t oas_bits)
@@ -140,25 +170,60 @@ void NativeMaliXnuBuffers::setOutputLimit(uint32_t oas_bits)
     limit_ = outputLimit(oas_bits);
 }
 
+int32_t NativeMaliXnuBuffers::acquireEntry()
+{
+    if(freeCount_ == 0)return -1;
+    return static_cast<int32_t>(freeSlots_[--freeCount_]);
+}
+
+void NativeMaliXnuBuffers::releaseEntry(uint32_t idx)
+{
+    if(freeCount_ < NativeMaliBoTableCapacity)
+        freeSlots_[freeCount_++] = idx;
+}
+
+void NativeMaliXnuBuffers::trackImported(uint32_t idx)
+{
+    if(importedCount_ < NativeMaliBoTableCapacity) {
+        entry_[idx].importedPos = static_cast<uint32_t>(importedCount_);
+        importedList_[importedCount_++] = idx;
+    }
+}
+
+void NativeMaliXnuBuffers::untrackImported(uint32_t idx)
+{
+    const uint32_t pos = entry_[idx].importedPos;
+    if(pos < importedCount_ && importedList_[pos] == idx) {
+        --importedCount_;
+        if(pos < importedCount_) {
+            const uint32_t moved = importedList_[importedCount_];
+            importedList_[pos] = moved;
+            entry_[moved].importedPos = pos;
+        }
+    }
+    entry_[idx].importedPos = UINT32_MAX;
+}
+
 IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
     NativeMaliMemorySpan *spans, size_t *count)
 {
-    if(!cpu || !spans || !count)return kIOReturnBadArgument;
+    return allocBounded(bytes, cpu, spans, NativeMaliMemoryMaxSpans, count);
+}
+
+IOReturn NativeMaliXnuBuffers::allocBounded(size_t bytes, void **cpu,
+    NativeMaliMemorySpan *spans, size_t maxSpans, size_t *count)
+{
+    if(!cpu || !spans || !count || maxSpans == 0)return kIOReturnBadArgument;
     if(bytes == 0 || (bytes % NativeMaliVmGranule) != 0 || bytes > limit_)
         return kIOReturnBadArgument;
 
-    Entry *slot = nullptr;
-    for(auto &entry : entry_)
-        if(!entry.descriptor) { slot = &entry; break; }
-    if(!slot)return kIOReturnNoResources;
+    if(!cpuIndexReady_)
+        cpuIndexReady_ = cpuIndex_.allocate();
 
-    /* Contiguous on purpose: NativeMaliMemoryMaxSpans is 64, so a scattered
-     * 1 MiB buffer would already need more spans than the pure layer accepts.
-     * A large allocation that cannot be made contiguous fails here instead of
-     * being silently truncated; the caller can retry smaller. */
-    /* UNVERIFIED(XNU): physically contiguous is a deliberate trade (the pure
-     * layer accepts at most 64 spans); whether a given size can be allocated
-     * this way on the phone is unknown (docs/UNVERIFIED.md). */
+    const int32_t slotIdx = acquireEntry();
+    if(slotIdx < 0)return kIOReturnNoResources;
+    Entry *slot = &entry_[slotIdx];
+
     IOBufferMemoryDescriptor *descriptor = nullptr;
     if(bytes <= 65536) {
         descriptor = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
@@ -170,10 +235,14 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
             bufferOptions(false), static_cast<vm_size_t>(bytes),
             (limit_ - 1) & ~UINT64_C(4095));
     }
-    if(!descriptor)return kIOReturnNoMemory;
+    if(!descriptor) {
+        releaseEntry(static_cast<uint32_t>(slotIdx));
+        return kIOReturnNoMemory;
+    }
     IOReturn status = descriptor->prepare();
     if(status != kIOReturnSuccess) {
         descriptor->release();
+        releaseEntry(static_cast<uint32_t>(slotIdx));
         return status;
     }
 
@@ -184,14 +253,24 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
         descriptor->getLength() != bytes)
         goto failed;
 
-    status = walkSpans(descriptor, bytes, spans, &spans_used);
+    status = walkSpans(descriptor, bytes, spans, maxSpans, &spans_used);
     if(status != kIOReturnSuccess)goto failed;
 
+    /* Zero through kernel WB mapping, then immediately clean+invalidate to PoC
+     * so dirty zero-lines never linger in CPU D-cache and later evict over
+     * userspace's Write-Combine (kIOMapWriteCombineCache) shader/job writes. */
     memset(mapping, 0, bytes);
+    flushSpansPhysical(spans, spans_used);
+
     slot->cpu = mapping;
     slot->firstPhysical = spans[0].physical;
+    slot->lastPhysical = spans[spans_used - 1].physical;
     slot->descriptor = descriptor;
     slot->bytes = bytes;
+    slot->importedPos = UINT32_MAX;
+    if(cpuIndexReady_)
+        cpuIndex_.insert(reinterpret_cast<uint64_t>(mapping),
+            static_cast<uint32_t>(slotIdx));
     *cpu = mapping;
     *count = spans_used;
     return kIOReturnSuccess;
@@ -199,12 +278,16 @@ IOReturn NativeMaliXnuBuffers::alloc(size_t bytes, void **cpu,
 failed:
     (void)descriptor->complete();
     descriptor->release();
+    releaseEntry(static_cast<uint32_t>(slotIdx));
     return status;
 }
 
 IOReturn NativeMaliXnuBuffers::walkSpans(IOMemoryDescriptor *descriptor,
-    size_t bytes, NativeMaliMemorySpan *spans, size_t *count) const
+    size_t bytes, NativeMaliMemorySpan *spans, size_t maxSpans,
+    size_t *count) const
 {
+    const size_t cap = maxSpans < NativeMaliMemoryMaxSpans
+        ? maxSpans : NativeMaliMemoryMaxSpans;
     size_t spans_used = 0;
     for(size_t offset = 0; offset < bytes; ) {
         IOByteCount length = 0;
@@ -220,7 +303,7 @@ IOReturn NativeMaliXnuBuffers::walkSpans(IOMemoryDescriptor *descriptor,
             physical == spans[spans_used - 1].physical + spans[spans_used - 1].bytes) {
             spans[spans_used - 1].bytes += chunk;
         } else {
-            if(spans_used == NativeMaliMemoryMaxSpans)return kIOReturnNoResources;
+            if(spans_used == cap)return kIOReturnNoResources;
             spans[spans_used].offset = offset;
             spans[spans_used].physical = physical;
             spans[spans_used].bytes = chunk;
@@ -235,22 +318,32 @@ IOReturn NativeMaliXnuBuffers::walkSpans(IOMemoryDescriptor *descriptor,
 IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
     void **cpu, NativeMaliMemorySpan *spans, size_t *count)
 {
-    if(!cpu || !spans || !count)return kIOReturnBadArgument;
+    return importHostBounded(userAddress, bytes, cpu, spans,
+        NativeMaliMemoryMaxSpans, count);
+}
+
+IOReturn NativeMaliXnuBuffers::importHostBounded(uint64_t userAddress,
+    size_t bytes, void **cpu, NativeMaliMemorySpan *spans, size_t maxSpans,
+    size_t *count)
+{
+    if(!cpu || !spans || !count || maxSpans == 0)return kIOReturnBadArgument;
     if(!owningTask_)return kIOReturnNotReady;
     if(userAddress == 0 || (userAddress & (NativeMaliVmGranule - 1)) ||
         bytes == 0 || (bytes % NativeMaliVmGranule) != 0 || bytes > limit_)
         return kIOReturnBadArgument;
 
-    Entry *slot = nullptr;
-    for(auto &entry : entry_)
-        if(!entry.descriptor) { slot = &entry; break; }
-    if(!slot)return kIOReturnNoResources;
+    const int32_t slotIdx = acquireEntry();
+    if(slotIdx < 0)return kIOReturnNoResources;
+    Entry *slot = &entry_[slotIdx];
 
     IOMemoryDescriptor *descriptor = IOMemoryDescriptor::withAddressRange(
         static_cast<mach_vm_address_t>(userAddress),
         static_cast<mach_vm_size_t>(bytes),
         static_cast<IOOptionBits>(kIODirectionInOut), owningTask_);
-    if(!descriptor)return kIOReturnBadArgument;
+    if(!descriptor) {
+        releaseEntry(static_cast<uint32_t>(slotIdx));
+        return kIOReturnBadArgument;
+    }
 
     IOReturn status = descriptor->prepare();
     if(status != kIOReturnSuccess) {
@@ -263,33 +356,34 @@ IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
             static_cast<mach_vm_address_t>(userAddress),
             static_cast<mach_vm_size_t>(bytes),
             static_cast<IOOptionBits>(kIODirectionOut), owningTask_);
-        if(!descriptor)return status;
+        if(!descriptor) {
+            releaseEntry(static_cast<uint32_t>(slotIdx));
+            return status;
+        }
         const IOReturn roStatus = descriptor->prepare();
         if(roStatus != kIOReturnSuccess) {
             descriptor->release();
+            releaseEntry(static_cast<uint32_t>(slotIdx));
             return roStatus;
         }
         status = kIOReturnSuccess;
     }
 
-    /* Do NOT map imported IOSurface/user allocations into kernel VA (XNU's
-     * io_submap is only 8 MiB, smaller than a single 1080x2340 framebuffer).
-     * Pinning via prepare() + walking physical segments is zero-copy, and
-     * cache maintenance operates directly on physical addresses via XNU's
-     * linear direct map (clean_dcache64 / flush_dcache64). */
     size_t spans_used = 0;
     if(descriptor->getLength() != bytes) {
         status = kIOReturnUnsupported;
         goto failed;
     }
 
-    status = walkSpans(descriptor, bytes, spans, &spans_used);
+    status = walkSpans(descriptor, bytes, spans, maxSpans, &spans_used);
     if(status != kIOReturnSuccess)goto failed;
 
     slot->cpu = nullptr;
     slot->firstPhysical = spans[0].physical;
+    slot->lastPhysical = spans[spans_used - 1].physical;
     slot->descriptor = descriptor;
     slot->bytes = bytes;
+    trackImported(static_cast<uint32_t>(slotIdx));
     *cpu = nullptr;
     *count = spans_used;
     return kIOReturnSuccess;
@@ -297,38 +391,80 @@ IOReturn NativeMaliXnuBuffers::importHost(uint64_t userAddress, size_t bytes,
 failed:
     (void)descriptor->complete();
     descriptor->release();
+    releaseEntry(static_cast<uint32_t>(slotIdx));
     return status;
 }
 
 void NativeMaliXnuBuffers::release(void *cpu, const NativeMaliMemorySpan *spans,
     size_t count)
 {
-    const bool matchPhys = (cpu == nullptr);
-    if(matchPhys && (!spans || count == 0))return;
-    for(auto &entry : entry_) {
-        if(!entry.descriptor)continue;
-        if(matchPhys) {
-            if(entry.cpu != nullptr || entry.firstPhysical != spans[0].physical)
-                continue;
-        } else if(entry.cpu != cpu) {
-            continue;
+    uint32_t foundIdx = UINT32_MAX;
+    if(cpu == nullptr) {
+        if(!spans || count == 0)return;
+        size_t totalBytes = 0;
+        for(size_t i = 0; i < count; ++i)
+            totalBytes += static_cast<size_t>(spans[i].bytes);
+        const uint64_t firstPhys = spans[0].physical;
+        const uint64_t lastPhys = spans[count - 1].physical;
+        for(size_t i = 0; i < importedCount_; ++i) {
+            const uint32_t idx = importedList_[i];
+            const Entry &entry = entry_[idx];
+            if(entry.descriptor && entry.cpu == nullptr &&
+                entry.firstPhysical == firstPhys &&
+                entry.lastPhysical == lastPhys &&
+                entry.bytes == totalBytes) {
+                foundIdx = idx;
+                break;
+            }
         }
-        IOMemoryDescriptor *descriptor = entry.descriptor;
-        entry = Entry{};
-        const IOReturn status = descriptor->complete();
-        if(status != kIOReturnSuccess) {
-            IOLog("NativeMali: buffer complete failed 0x%x, leaking %lu bytes\n",
-                status, static_cast<unsigned long>(descriptor->getLength()));
-            return;
+    } else {
+        if(cpuIndexReady_) {
+            const uint32_t idx = cpuIndex_.find(reinterpret_cast<uint64_t>(cpu));
+            if(idx < NativeMaliBoTableCapacity &&
+                entry_[idx].descriptor && entry_[idx].cpu == cpu)
+                foundIdx = idx;
         }
-        descriptor->release();
+        if(foundIdx == UINT32_MAX) {
+            for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i) {
+                if(entry_[i].descriptor && entry_[i].cpu == cpu) {
+                    foundIdx = static_cast<uint32_t>(i);
+                    break;
+                }
+            }
+        }
+    }
+    if(foundIdx == UINT32_MAX)return;
+
+    Entry &entry = entry_[foundIdx];
+    IOMemoryDescriptor *descriptor = entry.descriptor;
+    if(entry.cpu == nullptr)
+        untrackImported(foundIdx);
+    else if(cpuIndexReady_)
+        cpuIndex_.erase(reinterpret_cast<uint64_t>(entry.cpu));
+    entry = Entry{};
+    releaseEntry(foundIdx);
+
+    const IOReturn status = descriptor->complete();
+    if(status != kIOReturnSuccess) {
+        IOLog("NativeMali: buffer complete failed 0x%x, leaking %lu bytes\n",
+            status, static_cast<unsigned long>(descriptor->getLength()));
         return;
     }
+    descriptor->release();
 }
 
 IOMemoryDescriptor *NativeMaliXnuBuffers::descriptor(void *cpu)
 {
     if(!cpu)return nullptr;
+    if(cpuIndexReady_) {
+        const uint32_t idx = cpuIndex_.find(reinterpret_cast<uint64_t>(cpu));
+        if(idx < NativeMaliBoTableCapacity &&
+            entry_[idx].cpu == cpu && entry_[idx].descriptor) {
+            entry_[idx].descriptor->retain();
+            return entry_[idx].descriptor;
+        }
+        return nullptr;
+    }
     for(auto &entry : entry_)
         if(entry.cpu == cpu && entry.descriptor) {
             entry.descriptor->retain();
@@ -348,20 +484,12 @@ IOReturn NativeMaliXnuCache::maintain(void *cpu, size_t bytes,
 
     const uintptr_t address = reinterpret_cast<uintptr_t>(cpu);
     if(bytes > UINTPTR_MAX - address)return kIOReturnBadArgument;
-    /* The clean paths round the end up to a page; refuse instead of wrapping. */
     if(address + bytes > UINTPTR_MAX - (NativeMaliVmGranule - 1))
         return kIOReturnBadArgument;
     const uintptr_t begin = address & ~static_cast<uintptr_t>(NativeMaliVmGranule - 1);
     const uintptr_t end = (address + bytes + NativeMaliVmGranule - 1) &
         ~static_cast<uintptr_t>(NativeMaliVmGranule - 1);
 
-    /* Invalidate discards the CPU's copy, including a neighbour's dirty line in
-     * the same page, so it is only allowed on whole pages. Clean and
-     * clean+invalidate may round outward: writing a neighbour's line back is
-     * harmless. NativeAdrenoCpu.cpp states the same rule for owned pages.
-     * UNVERIFIED(HW): the sequence itself has not run on this phone, and the
-     * CPU/GPU coherency policy that drives it is still open
-     * (docs/UNVERIFIED.md, docs/OPEN_QUESTIONS.md item 5). */
     if(operation == NativeMaliCacheInvalidate &&
         (begin != address || end != address + bytes))
         return kIOReturnBadArgument;

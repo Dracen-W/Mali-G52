@@ -29,31 +29,145 @@ const NativeMaliBoTable::Slot *NativeMaliBoTable::find(uint64_t handle) const
     return const_cast<NativeMaliBoTable *>(this)->find(handle);
 }
 
-NativeMaliBoTable::Slot *NativeMaliBoTable::freeSlot()
+uint32_t NativeMaliBoTable::slotIndexForHandle(uint64_t handle) const
 {
-    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i)
-        if(!slot_[i].live)return &slot_[i];
+    const Slot *slot = find(handle);
+    if(!slot)return UINT32_MAX;
+    return static_cast<uint32_t>(slot - slot_);
+}
+
+NativeMaliBoTable::Slot *NativeMaliBoTable::acquireFreeSlot()
+{
+    for(size_t w = freeHintWord_; w < kBitmapWords; ++w) {
+        const uint64_t mask = freeBitmap_[w];
+        if(!mask)continue;
+        const uint32_t bit = static_cast<uint32_t>(__builtin_ctzll(mask));
+        freeBitmap_[w] &= ~(UINT64_C(1) << bit);
+        freeHintWord_ = w;
+        return &slot_[(w << 6) + bit];
+    }
     return nullptr;
 }
 
-/* [iova, iova + bytes) against every live mapping. The records are validated
- * first, so neither end can wrap here. */
+void NativeMaliBoTable::returnFreeSlot(uint32_t slotIndex)
+{
+    if(slotIndex >= NativeMaliBoTableCapacity)return;
+    const size_t w = slotIndex >> 6;
+    freeBitmap_[w] |= UINT64_C(1) << (slotIndex & 63u);
+    if(w < freeHintWord_)freeHintWord_ = w;
+}
+
+size_t NativeMaliBoTable::lowerBoundIova(uint64_t iova) const
+{
+    size_t lo = 0;
+    size_t hi = mappedCount_;
+    while(lo < hi) {
+        const size_t mid = lo + ((hi - lo) >> 1);
+        if(slot_[mappedSlots_[mid]].iova < iova)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+void NativeMaliBoTable::insertMappedSlot(uint32_t slotIndex)
+{
+    const uint64_t iova = slot_[slotIndex].iova;
+    const size_t pos = lowerBoundIova(iova);
+    if(pos < mappedCount_) {
+        memmove(&mappedSlots_[pos + 1], &mappedSlots_[pos],
+            (mappedCount_ - pos) * sizeof(mappedSlots_[0]));
+    }
+    mappedSlots_[pos] = slotIndex;
+    ++mappedCount_;
+}
+
+void NativeMaliBoTable::removeMappedSlot(uint32_t slotIndex)
+{
+    if(lastJobSlot_ == slotIndex)lastJobSlot_ = UINT32_MAX;
+    const uint64_t iova = slot_[slotIndex].iova;
+    const size_t pos = lowerBoundIova(iova);
+    if(pos < mappedCount_ && mappedSlots_[pos] == slotIndex) {
+        if(pos + 1 < mappedCount_) {
+            memmove(&mappedSlots_[pos], &mappedSlots_[pos + 1],
+                (mappedCount_ - pos - 1) * sizeof(mappedSlots_[0]));
+        }
+        --mappedCount_;
+        return;
+    }
+    /* Defensive fallback if iova was already zeroed before removal. */
+    for(size_t i = 0; i < mappedCount_; ++i) {
+        if(mappedSlots_[i] == slotIndex) {
+            if(i + 1 < mappedCount_) {
+                memmove(&mappedSlots_[i], &mappedSlots_[i + 1],
+                    (mappedCount_ - i - 1) * sizeof(mappedSlots_[0]));
+            }
+            --mappedCount_;
+            return;
+        }
+    }
+}
+
+/* [iova, iova + bytes) against every live mapping via O(log M) binary search.
+ * The records are validated first, so neither end can wrap here. */
 bool NativeMaliBoTable::rangeTaken(uint64_t iova, uint64_t bytes) const
 {
-    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i) {
-        const Slot &slot = slot_[i];
-        if(!slot.live || !slot.mapped)continue;
-        const uint64_t start = slot.memory.iova();
-        const uint64_t end = start + slot.memory.bytes();
-        if(iova < end && start < iova + bytes)return true;
+    if(mappedCount_ == 0)return false;
+    const uint64_t end = iova + bytes;
+    const size_t pos = lowerBoundIova(iova);
+    if(pos < mappedCount_) {
+        const Slot &next = slot_[mappedSlots_[pos]];
+        if(next.iova < end)return true;
+    }
+    if(pos > 0) {
+        const Slot &prev = slot_[mappedSlots_[pos - 1]];
+        const uint64_t prevEnd = prev.iova + prev.memory.bytes();
+        if(prevEnd > iova)return true;
     }
     return false;
 }
 
+const NativeMaliBoTable::Slot *NativeMaliBoTable::findCoveringSlot(
+    uint64_t start, uint64_t bytes) const
+{
+    if(!bytes || mappedCount_ == 0)return nullptr;
+    /* Find the first mapping with iova > start; the only candidate that can
+     * cover `start` is the entry immediately before it. */
+    size_t lo = 0;
+    size_t hi = mappedCount_;
+    while(lo < hi) {
+        const size_t mid = lo + ((hi - lo) >> 1);
+        if(slot_[mappedSlots_[mid]].iova <= start)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if(lo == 0)return nullptr;
+    const Slot &slot = slot_[mappedSlots_[lo - 1]];
+    if(!slot.live || !slot.mapped)return nullptr;
+    const uint64_t begin = slot.iova;
+    const uint64_t size = slot.memory.bytes();
+    if(start < begin || start - begin > size)return nullptr;
+    if(bytes > size - (start - begin))return nullptr;
+    return &slot;
+}
+
+NativeMaliBoTable::Slot *NativeMaliBoTable::findCoveringSlot(
+    uint64_t start, uint64_t bytes)
+{
+    return const_cast<Slot *>(
+        static_cast<const NativeMaliBoTable *>(this)->findCoveringSlot(start, bytes));
+}
+
 void NativeMaliBoTable::clear(Slot &slot)
 {
+    const uint32_t slotIndex = static_cast<uint32_t>(&slot - slot_);
+    if(slot.mapped)removeMappedSlot(slotIndex);
+    if(lastJobSlot_ == slotIndex)lastJobSlot_ = UINT32_MAX;
     index_.erase(slot.handle);
-    if(slot.live && live_)--live_;
+    const bool wasLive = slot.live;
+    if(wasLive && live_)--live_;
     slot.handle = 0;
     slot.iova = 0;
     slot.permissions = 0;
@@ -62,6 +176,7 @@ void NativeMaliBoTable::clear(Slot &slot)
     slot.mapped = false;
     slot.cpuMapped = false;
     slot.imported = false;
+    if(wasLive)returnFreeSlot(slotIndex);
 }
 
 IOReturn NativeMaliBoTable::open(NativeMaliMemorySource *source,
@@ -79,6 +194,12 @@ IOReturn NativeMaliBoTable::open(NativeMaliMemorySource *source,
         return kIOReturnBadArgument;
 
     if(!index_.allocate())return kIOReturnNoMemory;
+
+    for(size_t w = 0; w < kBitmapWords; ++w)
+        freeBitmap_[w] = ~UINT64_C(0);
+    freeHintWord_ = 0;
+    mappedCount_ = 0;
+    lastJobSlot_ = UINT32_MAX;
 
     source_ = source;
     maintainer_ = maintainer;
@@ -102,12 +223,15 @@ IOReturn NativeMaliBoTable::alloc(const NativeMaliAbiBoAlloc &request,
     IOReturn result = NativeMaliAbiValidate::boAlloc(request, maxBytes_);
     if(result != kIOReturnSuccess)return result;
 
-    Slot *slot = freeSlot();
+    Slot *slot = acquireFreeSlot();
     if(!slot)return kIOReturnNoResources;
 
     result = slot->memory.prepare(source_, static_cast<size_t>(request.bytes),
         coherent_, maintainer_);
-    if(result != kIOReturnSuccess)return result;
+    if(result != kIOReturnSuccess) {
+        returnFreeSlot(static_cast<uint32_t>(slot - slot_));
+        return result;
+    }
 
     /* Monotonic, never 0: a stale handle cannot name a later object. */
     uint64_t handle = nextHandle_++;
@@ -153,6 +277,7 @@ IOReturn NativeMaliBoTable::map(const NativeMaliAbiBoMap &request,
     slot->mapped = true;
     slot->iova = request.iova;
     slot->permissions = request.permissions;
+    insertMappedSlot(static_cast<uint32_t>(slot - slot_));
     reply->iova = request.iova;
     return kIOReturnSuccess;
 }
@@ -174,6 +299,7 @@ IOReturn NativeMaliBoTable::freeBo(const NativeMaliAbiBoFree &request)
     if(slot->mapped) {
         result = slot->memory.unmap();
         if(result != kIOReturnSuccess)return result;
+        removeMappedSlot(static_cast<uint32_t>(slot - slot_));
         slot->mapped = false;
         slot->iova = 0;
         slot->permissions = 0;
@@ -238,12 +364,15 @@ IOReturn NativeMaliBoTable::importHost(const NativeMaliAbiBoImportHost &request,
     IOReturn result = NativeMaliAbiValidate::boImportHost(request, maxBytes_);
     if(result != kIOReturnSuccess)return result;
 
-    Slot *slot = freeSlot();
+    Slot *slot = acquireFreeSlot();
     if(!slot)return kIOReturnNoResources;
 
     result = slot->memory.prepareImported(source_, request.address,
         static_cast<size_t>(request.bytes), coherent_, maintainer_);
-    if(result != kIOReturnSuccess)return result;
+    if(result != kIOReturnSuccess) {
+        returnFreeSlot(static_cast<uint32_t>(slot - slot_));
+        return result;
+    }
 
     uint64_t handle = nextHandle_++;
     if(nextHandle_ == 0)++nextHandle_;
@@ -287,6 +416,7 @@ IOReturn NativeMaliBoTable::syncBo(const NativeMaliAbiBoSync &request)
 IOReturn NativeMaliBoTable::releaseAll()
 {
     if(!open_)return kIOReturnNotReady;
+    if(live_ == 0)return kIOReturnSuccess;
 
     /* The connection that held these tokens is closing, so they cannot be
      * returned to their owner (NativeAdrenoUserClient::releaseAll() clears its
@@ -296,7 +426,7 @@ IOReturn NativeMaliBoTable::releaseAll()
         slot.cpuToken = 0;
     }
 
-    for(size_t i = 0; i < NativeMaliBoTableCapacity; ++i) {
+    for(size_t i = 0; i < NativeMaliBoTableCapacity && live_ > 0; ++i) {
         if(!slot_[i].live)continue;
         NativeMaliAbiBoFree request{};
         request.handle = slot_[i].handle;
@@ -322,24 +452,17 @@ void NativeMaliBoTable::reset()
         slot.imported = false;
     }
     index_.release();
+    memset(freeBitmap_, 0, sizeof(freeBitmap_));
+    freeHintWord_ = 0;
+    mappedCount_ = 0;
+    lastJobSlot_ = UINT32_MAX;
     live_ = 0;
     open_ = false;
 }
 
 bool NativeMaliBoTable::covers(uint64_t start, uint64_t bytes) const
 {
-    if(!bytes)return false;
-    for(const Slot &slot : slot_) {
-        if(!slot.live || !slot.mapped)continue;
-        const uint64_t begin = slot.memory.iova();
-        const uint64_t size = slot.memory.bytes();
-        /* Subtraction form: `begin + size` is inside the 48-bit space the map
-         * was validated against, but `start + bytes` is the caller's and may
-         * wrap. */
-        if(start < begin || start - begin > size)continue;
-        if(bytes <= size - (start - begin))return true;
-    }
-    return false;
+    return findCoveringSlot(start, bytes) != nullptr;
 }
 
 bool NativeMaliBoTable::readJobType(uint64_t start, uint64_t bytes,
@@ -347,24 +470,43 @@ bool NativeMaliBoTable::readJobType(uint64_t start, uint64_t bytes,
 {
     if(!bytes || !jobType)return false;
     *jobType = 0;
-    for(Slot &slot : slot_) {
-        if(!slot.live || !slot.mapped)continue;
-        const uint64_t begin = slot.memory.iova();
-        const uint64_t size = slot.memory.bytes();
-        if(start < begin || start - begin > size)continue;
-        const uint64_t off = start - begin;
-        if(bytes > size - off)continue;
-        const uint8_t *cpu = static_cast<const uint8_t *>(slot.memory.cpu());
-        if(cpu && bytes >= 20) {
-            (void)slot.memory.invalidateForCpu(static_cast<size_t>(off),
-                static_cast<size_t>(bytes));
-            uint32_t word4 = 0;
-            memcpy(&word4, cpu + off + 16, sizeof(word4));
-            *jobType = (word4 >> 1) & 0x7fu;
+
+    Slot *slot = nullptr;
+    if(lastJobSlot_ < NativeMaliBoTableCapacity) {
+        Slot &cached = slot_[lastJobSlot_];
+        if(cached.live && cached.mapped) {
+            const uint64_t begin = cached.iova;
+            const uint64_t size = cached.memory.bytes();
+            if(start >= begin && start - begin <= size &&
+                bytes <= size - (start - begin))
+                slot = &cached;
         }
-        return true;
     }
-    return false;
+    if(!slot) {
+        slot = findCoveringSlot(start, bytes);
+        if(!slot)return false;
+        lastJobSlot_ = static_cast<uint32_t>(slot - slot_);
+    }
+
+    const uint64_t off = start - slot->iova;
+    const uint8_t *cpu = static_cast<const uint8_t *>(slot->memory.cpu());
+    if(cpu && bytes >= 20) {
+        /* Invalidate the page-aligned range covering the job header so XNU's
+         * whole-page DC IVAC check succeeds and the kernel WB mapping sees
+         * userspace's Write-Combine writes instead of stale cache lines. */
+        const size_t pageMask = static_cast<size_t>(NativeMaliVmGranule - 1);
+        const size_t pageStart = static_cast<size_t>(off) & ~pageMask;
+        const size_t pageEnd = (static_cast<size_t>(off + bytes) + pageMask) & ~pageMask;
+        const size_t clampedEnd = pageEnd <= slot->memory.bytes()
+            ? pageEnd : slot->memory.bytes();
+        if(clampedEnd > pageStart) {
+            (void)slot->memory.invalidateForCpu(pageStart, clampedEnd - pageStart);
+        }
+        uint32_t word4 = 0;
+        memcpy(&word4, cpu + off + 16, sizeof(word4));
+        *jobType = (word4 >> 1) & 0x7fu;
+    }
+    return true;
 }
 
 bool NativeMaliBoTable::mapped(uint64_t handle) const
@@ -387,9 +529,9 @@ const NativeMaliMemory *NativeMaliBoTable::memory(uint64_t handle) const
 
 NativeMaliMemory *NativeMaliBoTable::memoryForToken(uint32_t token)
 {
-    if(!open_ || !token)return nullptr;
-    for(Slot &slot : slot_)
-        if(slot.live && slot.cpuMapped && slot.cpuToken == token)
-            return &slot.memory;
+    if(!open_ || !token || token > NativeMaliBoTableCapacity)return nullptr;
+    Slot &slot = slot_[token - 1];
+    if(slot.live && slot.cpuMapped && slot.cpuToken == token)
+        return &slot.memory;
     return nullptr;
 }

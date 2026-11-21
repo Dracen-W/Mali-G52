@@ -3,6 +3,7 @@
 #ifndef NATIVE_MALI_STUB_IOLIB_H
 #define NATIVE_MALI_STUB_IOLIB_H
 #include <IOKit/IOTypes.h>
+#include <stdio.h>
 #include <new>
 
 template <class T>

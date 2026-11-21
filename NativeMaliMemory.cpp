@@ -6,24 +6,14 @@
 
 namespace {
 
+constexpr size_t kStackSpanCapacity = 64;
+
 IOReturn checkBufferRange(size_t total, size_t offset, size_t bytes)
 {
     if(offset > total)return kIOReturnBadArgument;
     if(bytes > total - offset)return kIOReturnBadArgument;
     return kIOReturnSuccess;
 }
-
-} // namespace
-
-NativeMaliMemory::~NativeMaliMemory()
-{
-    /* No registers are touched here, so a still-mapped buffer is only dropped
-     * from the CPU side. The caller's address-space teardown must already have
-     * run; a stale IOVA is a GPU fault, not a leak. */
-    reset();
-}
-
-namespace {
 
 IOReturn validateSpans(void *cpu, bool requireCpu,
     const NativeMaliMemorySpan *spans, size_t count, size_t bytes)
@@ -45,7 +35,21 @@ IOReturn validateSpans(void *cpu, bool requireCpu,
     return expected == bytes ? kIOReturnSuccess : kIOReturnBadArgument;
 }
 
+size_t boundedSpanCount(size_t bytes)
+{
+    const size_t pages = bytes / NativeMaliVmGranule;
+    return pages < NativeMaliMemoryMaxSpans ? pages : NativeMaliMemoryMaxSpans;
+}
+
 } // namespace
+
+NativeMaliMemory::~NativeMaliMemory()
+{
+    /* No registers are touched here, so a still-mapped buffer is only dropped
+     * from the CPU side. The caller's address-space teardown must already have
+     * run; a stale IOVA is a GPU fault, not a leak. */
+    reset();
+}
 
 IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
     bool cpuCoherent, NativeMaliCacheMaintainer *maintainer)
@@ -59,36 +63,69 @@ IOReturn NativeMaliMemory::prepare(NativeMaliMemorySource *source, size_t bytes,
      * silently skipping the clean/invalidate the hardware needs. */
     if(!cpuCoherent && !maintainer)return kIOReturnBadArgument;
 
-    /* Allocate span scratch dynamically on the heap: neither on the 16 KiB XNU
-     * kernel stack nor inline per BO slot (512 * 65536 * 24 B = 768 MiB!). */
-    NativeMaliMemorySpan *spans = IONewData(NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
-    if(!spans)return kIOReturnNoMemory;
-    memset(spans, 0, sizeof(NativeMaliMemorySpan) * NativeMaliMemoryMaxSpans);
+    /* Avoid allocating and zeroing 1.5 MiB on every small BO when the source
+     * supports bounded spans: BOs up to 256 KiB use a 1.5 KiB stack buffer,
+     * and larger BOs allocate only min(pages, NativeMaliMemoryMaxSpans). */
+    NativeMaliMemorySpan stackSpans[kStackSpanCapacity];
+    NativeMaliMemorySpan *spans = nullptr;
+    size_t scratchCap = 0;
+    bool heapScratch = false;
+    const bool bounded = source->supportsBoundedSpans();
+    if(bounded) {
+        scratchCap = boundedSpanCount(bytes);
+        if(scratchCap <= kStackSpanCapacity) {
+            spans = stackSpans;
+        } else {
+            spans = IONewData(NativeMaliMemorySpan, scratchCap);
+            if(!spans)return kIOReturnNoMemory;
+            heapScratch = true;
+        }
+    } else {
+        scratchCap = NativeMaliMemoryMaxSpans;
+        spans = IONewData(NativeMaliMemorySpan, scratchCap);
+        if(!spans)return kIOReturnNoMemory;
+        heapScratch = true;
+    }
+
     void *cpu = nullptr;
     size_t count = 0;
-    IOReturn result = source->alloc(bytes, &cpu, spans, &count);
+    IOReturn result = bounded
+        ? source->allocBounded(bytes, &cpu, spans, scratchCap, &count)
+        : source->alloc(bytes, &cpu, spans, &count);
     if(result != kIOReturnSuccess) {
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
         return result;
     }
 
     IOReturn bad = validateSpans(cpu, true, spans, count, bytes);
     if(bad != kIOReturnSuccess) {
         source->release(cpu, spans, count);
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
         return bad;
     }
 
-    /* Shrink storage to the exact span count so small BOs only hold a few entries. */
-    NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
-    if(compact) {
-        memcpy(compact, spans, count * sizeof(spans[0]));
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
-        span_ = compact;
-        spanCap_ = count;
-    } else {
+    if(count == 1) {
+        inlineSpan_ = spans[0];
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
+        span_ = &inlineSpan_;
+        spanCap_ = 0;
+    } else if(heapScratch && count == scratchCap) {
         span_ = spans;
-        spanCap_ = NativeMaliMemoryMaxSpans;
+        spanCap_ = scratchCap;
+    } else {
+        NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
+        if(compact) {
+            memcpy(compact, spans, count * sizeof(spans[0]));
+            if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
+            span_ = compact;
+            spanCap_ = count;
+        } else if(heapScratch) {
+            span_ = spans;
+            spanCap_ = scratchCap;
+        } else {
+            source->release(cpu, spans, count);
+            return kIOReturnNoMemory;
+        }
     }
     spans_ = count;
     cpu_ = cpu;
@@ -111,33 +148,66 @@ IOReturn NativeMaliMemory::prepareImported(NativeMaliMemorySource *source,
         return kIOReturnBadArgument;
     if(!cpuCoherent && !maintainer)return kIOReturnBadArgument;
 
-    NativeMaliMemorySpan *spans = IONewData(NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
-    if(!spans)return kIOReturnNoMemory;
-    memset(spans, 0, sizeof(NativeMaliMemorySpan) * NativeMaliMemoryMaxSpans);
+    NativeMaliMemorySpan stackSpans[kStackSpanCapacity];
+    NativeMaliMemorySpan *spans = nullptr;
+    size_t scratchCap = 0;
+    bool heapScratch = false;
+    const bool bounded = source->supportsBoundedSpans();
+    if(bounded) {
+        scratchCap = boundedSpanCount(bytes);
+        if(scratchCap <= kStackSpanCapacity) {
+            spans = stackSpans;
+        } else {
+            spans = IONewData(NativeMaliMemorySpan, scratchCap);
+            if(!spans)return kIOReturnNoMemory;
+            heapScratch = true;
+        }
+    } else {
+        scratchCap = NativeMaliMemoryMaxSpans;
+        spans = IONewData(NativeMaliMemorySpan, scratchCap);
+        if(!spans)return kIOReturnNoMemory;
+        heapScratch = true;
+    }
+
     void *cpu = nullptr;
     size_t count = 0;
-    IOReturn result = source->importHost(userAddress, bytes, &cpu, spans, &count);
+    IOReturn result = bounded
+        ? source->importHostBounded(userAddress, bytes, &cpu, spans, scratchCap, &count)
+        : source->importHost(userAddress, bytes, &cpu, spans, &count);
     if(result != kIOReturnSuccess) {
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
         return result;
     }
 
     IOReturn bad = validateSpans(cpu, false, spans, count, bytes);
     if(bad != kIOReturnSuccess) {
         source->release(cpu, spans, count);
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
         return bad;
     }
 
-    NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
-    if(compact) {
-        memcpy(compact, spans, count * sizeof(spans[0]));
-        IODeleteData(spans, NativeMaliMemorySpan, NativeMaliMemoryMaxSpans);
-        span_ = compact;
-        spanCap_ = count;
-    } else {
+    if(count == 1) {
+        inlineSpan_ = spans[0];
+        if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
+        span_ = &inlineSpan_;
+        spanCap_ = 0;
+    } else if(heapScratch && count == scratchCap) {
         span_ = spans;
-        spanCap_ = NativeMaliMemoryMaxSpans;
+        spanCap_ = scratchCap;
+    } else {
+        NativeMaliMemorySpan *compact = IONewData(NativeMaliMemorySpan, count);
+        if(compact) {
+            memcpy(compact, spans, count * sizeof(spans[0]));
+            if(heapScratch)IODeleteData(spans, NativeMaliMemorySpan, scratchCap);
+            span_ = compact;
+            spanCap_ = count;
+        } else if(heapScratch) {
+            span_ = spans;
+            spanCap_ = scratchCap;
+        } else {
+            source->release(cpu, spans, count);
+            return kIOReturnNoMemory;
+        }
     }
     spans_ = count;
     cpu_ = cpu;
@@ -164,10 +234,11 @@ IOReturn NativeMaliMemory::prepareImported(NativeMaliMemorySource *source,
 void NativeMaliMemory::reset()
 {
     if(prepared_ && source_)source_->release(cpu_, span_, spans_);
-    if(span_) {
+    if(span_ && span_ != &inlineSpan_) {
         IODeleteData(span_, NativeMaliMemorySpan, spanCap_);
-        span_ = nullptr;
     }
+    span_ = nullptr;
+    inlineSpan_ = NativeMaliMemorySpan{};
     spanCap_ = 0;
     spans_ = 0;
     source_ = nullptr;

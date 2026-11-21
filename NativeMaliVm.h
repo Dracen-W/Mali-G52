@@ -79,10 +79,11 @@ enum : uint32_t {
     NativeMaliVmMinIas = 32,
     NativeMaliVmBitsPerLevel = 9
 };
-/* The 1 + up-to-4 tables of one address space, plus slack for the tests'
- * scattered mappings. A caller that walks off this limit gets an error, never a
- * silent truncation. */
-enum : size_t { NativeMaliVmMaxTables = 512 };
+/* Page-table budget per address space (must be a power of two <= 32768 for
+ * the O(1) physical-address hash table). 2048 tables cover up to ~4 GiB of
+ * sparse L3 mappings, preventing premature kIOReturnNoResources under heavy
+ * Metal/compositor VA fragmentation. */
+enum : size_t { NativeMaliVmMaxTables = 2048 };
 
 /* Permissions as the encoder consumes them. Read and write are the [7:6] pair;
  * Cached selects attribute index 1, Mmio index 2; NoExec sets XN. */
@@ -126,6 +127,13 @@ struct NativeMaliVmGeometry {
 };
 
 class NativeMaliVm final {
+    enum : size_t {
+        kPhysHashSize = NativeMaliVmMaxTables * 2,
+        kPhysHashMask = kPhysHashSize - 1
+    };
+    static_assert((kPhysHashSize & kPhysHashMask) == 0,
+        "NativeMaliVmMaxTables must be a power of two");
+
     struct Table {
         uint64_t *pte;
         uint64_t phys;
@@ -134,6 +142,9 @@ class NativeMaliVm final {
     NativeMaliPageSource *source_ = nullptr;
     NativeMaliCacheMaintainer *maintainer_ = nullptr;
     NativeMaliPage page_[NativeMaliVmMaxTables]{};
+    /* Open-addressed hash table: stores (tableIndex + 1) for O(1) phys->table
+     * lookup during page-table walks (0 = empty). */
+    uint16_t physHash_[kPhysHashSize]{};
     uint64_t dirtyTables_[(NativeMaliVmMaxTables + 63) / 64]{};
     size_t tables_ = 0;
     NativeMaliVmGeometry geometry_{};
@@ -142,12 +153,18 @@ class NativeMaliVm final {
     uint64_t *pgd_ = nullptr;
     uint64_t mapped_pages_ = 0;
 
+    static size_t physHashSlot(uint64_t phys);
+    void indexTablePhys(uint64_t phys, size_t tableIndex);
+    bool lookupTablePhys(uint64_t phys, uint64_t **cpuOut,
+        size_t *indexOut) const;
+
     uint32_t shift(uint32_t level) const;
     uint32_t indexBits(uint32_t level) const;
     uint32_t index(uint64_t iova, uint32_t level) const;
     void markDirty(size_t tableIndex);
     IOReturn allocate(uint64_t **table, uint64_t *phys, size_t *tableIndex);
     IOReturn descendL3(uint64_t iova, uint64_t **l3Table, size_t *tableIndex);
+    IOReturn findL3(uint64_t iova, uint64_t **l3Table, size_t *tableIndex) const;
     /* Publish every table page with NativeMaliCacheClean when the walker is not
      * coherent; a no-op when it is coherent or when no maintainer was given. */
     IOReturn publishTables();

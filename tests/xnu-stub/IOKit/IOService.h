@@ -33,7 +33,16 @@ public:
     unsigned int getLength() const;
 };
 
-class OSDictionary : public OSObject {};
+class OSString : public OSObject {
+public:
+    static OSString *withCString(const char *cString);
+};
+
+class OSDictionary : public OSObject {
+public:
+    static OSDictionary *withCapacity(unsigned int capacity);
+    bool setObject(const char *aKey, const OSObject *anObject);
+};
 
 #define OSDynamicCast(type, object) (dynamic_cast<type *>(object))
 
@@ -51,6 +60,8 @@ public:
     virtual bool terminate(IOOptionBits options = 0);
     void registerService();
     OSObject *getProperty(const char *key) const;
+    bool setProperty(const char *aKey, const char *aString);
+    bool setProperty(const char *aKey, OSObject *anObject);
     IODeviceMemory *getDeviceMemoryWithIndex(unsigned int index);
 };
 

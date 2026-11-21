@@ -9,6 +9,8 @@ class IOMemoryMap;
 
 class IOMemoryDescriptor : public OSObject {
 public:
+    static IOMemoryDescriptor *withPhysicalAddress(addr64_t address,
+        IOByteCount withLength, IOOptionBits options);
     static IOMemoryDescriptor *withAddressRange(mach_vm_address_t address,
         mach_vm_size_t length, IOOptionBits options, task_t task);
     virtual IOMemoryMap *map(IOOptionBits options = 0);

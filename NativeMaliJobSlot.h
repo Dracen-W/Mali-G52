@@ -204,152 +204,33 @@ public:
      * when `jobChain` is set, the disambiguation flag. Pure. */
     static uint32_t configValue(uint32_t as, bool jobChain);
 
-    /* panfrost_job_hw_submit(): start the chain whose first descriptor is at
-     * `head` on slot `js`.
-     *
-     * Refusals, all before the first write: not prepared, M6 writes compiled
-     * out, GPU not readable, `js` outside NativeMaliJobSlotCount or not in
-     * GPU_JS_PRESENT, `as` outside NativeMaliJobMaxAddressSpace or not
-     * allocated in the MMU, or a `head` of 0 or not 64-byte aligned.
-     * kIOReturnBusy when JS_COMMAND_NEXT is not zero, i.e. another command is
-     * staged (the source's WARN_ON).
-     *
-     * `flushId` is GPU_LATEST_FLUSH_ID (NativeMaliGpuCore::latestFlushId()); it
-     * is written unconditionally because the flush-reduction feature is always
-     * on for this GPU.
-     *
-     * A write failure cancels the staged job with JS_COMMAND_NEXT =
-     * JS_COMMAND_NOP (best effort) and returns the original error. The slot's
-     * chain parity is only advanced by a successful start, so a retry is the
-     * same chain number.
-     *
-     * kIOReturnBusy also when a job submitted earlier on this slot has not been
-     * reaped by waitForCompletion() yet, and kIOReturnNotReady when the slot is
-     * faulted (see clearFault()).
-     *
-     * On success `fence`, when given, receives the slot and the seqno the chain
-     * was started with (panfrost_job.c:106). It is written only on success and
-     * zeroed on entry, so a refusal cannot leave a believable fence behind. */
     IOReturn submit(uint32_t js, uint64_t head, uint32_t as, uint32_t flushId,
         NativeMaliFence *fence = nullptr);
 
-    /* Wait for the job submitted on `js` to finish, polling JOB_INT_RAWSTAT.
-     *
-     *   kIOReturnSuccess    DONE arrived; the slot's DONE bit is cleared and the
-     *                       slot is free for the next submit.
-     *   kIOReturnIOError    ERR arrived. `completion->jsStatus` holds the
-     *                       reason; the staged next command is cancelled with
-     *                       JS_COMMAND_NEXT = JS_COMMAND_NOP, the slot's bits
-     *                       are cleared, and the slot is latched as faulted
-     *                       (submit() refuses until clearFault()).
-     *   kIOReturnTimeout    neither bit arrived in time. Nothing is written and
-     *                       the job stays outstanding, so the call can be
-     *                       repeated; a timeout is not a completion.
-     *   other               gate/read/write error, returned unchanged.
-     *
-     * Only this slot's DONE and ERR bits are cleared: the source clears the
-     * whole word, but it also samples JS_STATE under that write, and clearing
-     * another slot's event here would steal that slot's completion. */
     IOReturn waitForCompletion(uint32_t js,
         NativeMaliJobCompletion *completion,
         uint64_t timeout_us = DefaultCompletionTimeoutUs,
         uint64_t poll_us = CompletionPollUs);
 
-    /* panfrost_jm_reset_interrupts() (panfrost_job.c:435-438): one write of
-     * JOB_INT_CLEAR = ALL_JS_INT_MASK. A GPU reset can latch a job event that
-     * no job of ours produced, so the whole palette is cleared before anything
-     * is submitted again. This only touches the event word; it says nothing
-     * about the jobs themselves - panfrost stops its schedulers separately,
-     * and this driver's equivalent is abandonOutstanding().
-     *
-     * Requires a prepared slot, kWriteAuthorized and a known GPU_JS_PRESENT
-     * (setPresent(), as submit() already does: the source's call site is after
-     * panfrost_jm_init()), and goes through gpuReadable() like every other
-     * write. A write failure is returned unchanged. No output is zeroed because
-     * there is none; calling it twice writes the same word twice, which is
-     * harmless and matches the source. */
+    /* Non-blocking reap of a cleanly completed (DONE without ERR) job on `js`.
+     * Prevents cross-client slot starvation when another client's job has
+     * already finished on hardware before that client calls WaitFence. Never
+     * consumes an ERR completion so the owning client still observes its fault. */
+    IOReturn reapIfDone(uint32_t js);
+
     IOReturn resetInterrupts();
-
-    /* The job-manager quiesce panfrost_reset() runs before the hardware reset
-     * (panfrost_job.c:697-709): for every slot in GPU_JS_PRESENT, cancel the
-     * staged next command with JS_COMMAND_NEXT = JS_COMMAND_NOP and ask the
-     * running chain to stop with JS_COMMAND = JS_COMMAND_SOFT_STOP; then poll
-     * JOB_INT_JS_STATE every 10 us for at most 10 ms until no slot is active.
-     *
-     * A slot is active while its JS_STATE bit is set and no DONE/ERR bit for it
-     * has appeared in JOB_INT_RAWSTAT; once an event is seen, that slot is
-     * masked out of the remaining polls (panfrost_active_slots(),
-     * panfrost_job.c:637-656). Only the slots GPU_JS_PRESENT names are written:
-     * the source loops over all three because it drives all three, but a slot
-     * this GPU does not have is not one this driver may touch, and submit()
-     * already refuses it for the same reason.
-     *
-     * kIOReturnSuccess  every slot went quiet.
-     * kIOReturnTimeout  some slot was still active after 10 ms. The source logs
-     *                   "Soft-stop failed" and resets anyway (:708-709). This is
-     *                   a distinct answer, not a swallowed success, so the
-     *                   caller decides and can record it.
-     * other             a gate or register error, returned unchanged.
-     *
-     * Requires a prepared slot, kWriteAuthorized, a known GPU_JS_PRESENT and a
-     * readable GPU, the same gates as resetInterrupts(). */
     IOReturn quiesce();
-
-    /* The scheduler half of panfrost_reset(): the reset worker stops every
-     * queue and signals the in-flight fences with an error before the hardware
-     * is reset (drm_sched_stop() in panfrost_reset(), and
-     * panfrost_device_reset() itself). This driver has no scheduler and no job
-     * object, so the equivalent is a pure state drop: the reset destroyed every
-     * in-flight job, so no slot is outstanding and no slot is faulted any more.
-     * `emitSeqno_`/`completedSeqno_` are deliberately kept - the source does
-     * not reset emit_seqno either, and they are only compared.
-     *
-     * Pure: no register, no gate, idempotent. Call it after the hardware reset
-     * (softReset -> powerOn -> resetAllocation -> resetInterrupts); the clients
-     * that held those fences learn about the loss from
-     * NativeMaliUserClient::noteReset(), which reads latestSeqno() >
-     * completedSeqno() and therefore does not depend on the order of the two
-     * calls. A fence that was in flight here is never signaled: it was not
-     * reaped by a completion, which is what fenceSignaled() means. */
     void abandonOutstanding();
 
-    /* True between a successful submit() and a waitForCompletion() that reaped
-     * it. A false answer for a slot that does not exist is also false. */
     bool outstanding(uint32_t js) const
     {
         return js < NativeMaliJobSlotCount && outstanding_[js];
     }
-    /* True after waitForCompletion() saw ERR on `js`; submit() refuses such a
-     * slot until clearFault(). False for a slot that does not exist. */
     bool faulted(uint32_t js) const
     {
         return js < NativeMaliJobSlotCount && faulted_[js];
     }
 
-    /* Fence bookkeeping. The seqno is the one submit() gave the chain above, so
-     * a client can keep "(slot, seqno)" and ask later whether that job is done
-     * without waiting:
-     *
-     *   latestSeqno(js)     the last seqno submit() started on `js` (0 before
-     *                       the first job).
-     *   completedSeqno(js)  the highest seqno waitForCompletion() has reaped
-     *                       there. Jobs on one slot complete in order, so
-     *                       `fence.seqno <= completedSeqno(fence.js)` means the
-     *                       job is no longer in flight - it says nothing about
-     *                       success: a faulted job also signals, and the reason
-     *                       is in the completion the reaper received.
-     *   fenceSignaled()     the same test plus the slot range check, false for
-     *                       an invalid or out-of-range fence.
-     *
-     * No "is this seqno even from the future" check is needed:
-     * completedSeqno(js) is only ever assigned emitSeqno(js), so it can never
-     * run ahead of what was submitted, and a seqno above latestSeqno(js) fails
-     * the completed comparison on its own.
-     *
-     * panfrost signals its dma_fence from the interrupt handler; here the
-     * signal is the successful reap, because completion is polled. Nothing is
-     * reset by clearFault() or by a GPU reset: the seqno is only ever
-     * compared, and panfrost does not reset emit_seqno either. */
     uint32_t latestSeqno(uint32_t js) const
     {
         return js < NativeMaliJobSlotCount ? emitSeqno_[js] : 0;
@@ -363,11 +244,6 @@ public:
         if(!fence.valid() || fence.js >= NativeMaliJobSlotCount)return false;
         return fence.seqno <= completedSeqno_[fence.js];
     }
-    /* Forget the fault latch so the slot may be used again. This touches no
-     * hardware: the caller is expected to have reset the GPU (the source
-     * schedules a reset whenever the exception needs one,
-     * panfrost_device.h:333-338) and to have re-armed the AS/VM. Idempotent;
-     * kIOReturnBusy while a job is still outstanding. */
     IOReturn clearFault(uint32_t js);
 
 private:
@@ -380,15 +256,9 @@ private:
     NativeMaliMmu *mmu_ = nullptr;
     uint32_t jsPresent_ = 0;
     uint64_t shaderPresent_ = 0;
-    /* panfrost_job.c:106: fence->seqno = ++queue[js].emit_seqno, and the chain
-     * flag is its parity, so a slot's first submission sets the flag. */
     uint32_t emitSeqno_[NativeMaliJobSlotCount]{};
-    /* One job per slot, so the DONE bit belongs to the job this driver started
-     * and waiting twice cannot consume someone else's event. */
     bool outstanding_[NativeMaliJobSlotCount]{};
     bool faulted_[NativeMaliJobSlotCount]{};
-    /* The highest fence seqno reaped on each slot (emitSeqno_ is the last one
-     * started). Both start at 0, i.e. "nothing started/completed yet". */
     uint32_t completedSeqno_[NativeMaliJobSlotCount]{};
 };
 #endif

@@ -30,6 +30,41 @@ constexpr uint64_t kMemattrWriteAllocate = 0x8dull;
 
 } // namespace
 
+size_t NativeMaliVm::physHashSlot(uint64_t phys)
+{
+    const uint64_t pageNum = phys >> kGranuleShift;
+    return static_cast<size_t>((pageNum * UINT64_C(0x9e3779b97f4a7c15)) >> 40) &
+        kPhysHashMask;
+}
+
+void NativeMaliVm::indexTablePhys(uint64_t phys, size_t tableIndex)
+{
+    size_t slot = physHashSlot(phys);
+    for(size_t n = 0; n < kPhysHashSize; ++n, slot = (slot + 1) & kPhysHashMask) {
+        if(!physHash_[slot]) {
+            physHash_[slot] = static_cast<uint16_t>(tableIndex + 1);
+            return;
+        }
+    }
+}
+
+bool NativeMaliVm::lookupTablePhys(uint64_t phys, uint64_t **cpuOut,
+    size_t *indexOut) const
+{
+    size_t slot = physHashSlot(phys);
+    for(size_t n = 0; n < kPhysHashSize; ++n, slot = (slot + 1) & kPhysHashMask) {
+        const uint16_t encoded = physHash_[slot];
+        if(!encoded)return false;
+        const size_t idx = static_cast<size_t>(encoded - 1);
+        if(idx < tables_ && page_[idx].phys == phys) {
+            if(cpuOut)*cpuOut = static_cast<uint64_t *>(page_[idx].cpu);
+            if(indexOut)*indexOut = idx;
+            return true;
+        }
+    }
+    return false;
+}
+
 uint64_t NativeMaliVm::encodePhysical(uint64_t paddr)
 {
     /* paddr_to_iopte(): the overlapping RES0 bits are folded out, so a 40-bit
@@ -125,11 +160,12 @@ IOReturn NativeMaliVm::allocate(uint64_t **table, uint64_t *phys,
     memset(page.cpu, 0, NativeMaliVmGranule);
     const size_t idx = tables_;
     page_[idx] = page;
+    ++tables_;
+    indexTablePhys(page.phys, idx);
     markDirty(idx);
     *table = static_cast<uint64_t *>(page.cpu);
     *phys = page.phys;
     if(tableIndex)*tableIndex = idx;
-    ++tables_;
     return kIOReturnSuccess;
 }
 
@@ -155,13 +191,8 @@ IOReturn NativeMaliVm::descendL3(uint64_t iova, uint64_t **l3Table,
             uint64_t *next = nullptr;
             size_t nextIndex = 0;
             const uint64_t targetPhys = decodePhysical(entry);
-            for(size_t slot_index = 0; slot_index < tables_; ++slot_index)
-                if(page_[slot_index].phys == targetPhys) {
-                    next = static_cast<uint64_t *>(page_[slot_index].cpu);
-                    nextIndex = slot_index;
-                    break;
-                }
-            if(!next)return kIOReturnIOError;   /* a table this space never made */
+            if(!lookupTablePhys(targetPhys, &next, &nextIndex))
+                return kIOReturnIOError;   /* a table this space never made */
             table = next;
             currentIndex = nextIndex;
         } else {
@@ -175,39 +206,26 @@ IOReturn NativeMaliVm::descendL3(uint64_t iova, uint64_t **l3Table,
 }
 
 /* The read-only twin of descendL3(): it never allocates. */
-static IOReturn findL3(const NativeMaliPage *pages, size_t count, uint64_t *pgd,
-    const NativeMaliVmGeometry &geometry, uint64_t iova, uint64_t **l3Table,
-    size_t *tableIndex)
+IOReturn NativeMaliVm::findL3(uint64_t iova, uint64_t **l3Table,
+    size_t *tableIndex) const
 {
-    auto shift_of = [&](uint32_t level) { return (4 - level) * geometry.bits_per_level + 3; };
-    auto bits_of = [&](uint32_t level) {
-        return level == geometry.start_level ? geometry.pgd_bits : geometry.bits_per_level;
-    };
-    uint64_t *table = pgd;
+    uint64_t *table = pgd_;
     size_t currentIndex = 0;
-    for(uint32_t level = 0; level < 3; ++level) {
-        const uint32_t bits = bits_of(level);
-        const uint32_t slot = bits ? uint32_t((iova >> shift_of(level)) &
-            ((UINT64_C(1) << bits) - 1)) : 0;
-        const uint64_t entry = table[slot];
+    for(uint32_t level = 0; level < kMaxLevels - 1; ++level) {
+        const uint64_t entry = table[index(iova, level)];
         if(!entry) {
             *l3Table = nullptr;
             return kIOReturnSuccess;
         }
-        if((entry & 3) != 3) {
+        if((entry & kTypeMask) != kTypeTable) {
             *l3Table = nullptr;   /* a leaf above the last level: not ours */
             return kIOReturnSuccess;
         }
         uint64_t *next = nullptr;
         size_t nextIndex = 0;
-        const uint64_t targetPhys = entry & UINT64_C(0x0000fffffffff000);
-        for(size_t i = 0; i < count; ++i)
-            if(pages[i].phys == targetPhys) {
-                next = static_cast<uint64_t *>(pages[i].cpu);
-                nextIndex = i;
-                break;
-            }
-        if(!next)return kIOReturnIOError;
+        const uint64_t targetPhys = decodePhysical(entry);
+        if(!lookupTablePhys(targetPhys, &next, &nextIndex))
+            return kIOReturnIOError;
         table = next;
         currentIndex = nextIndex;
     }
@@ -280,6 +298,7 @@ void NativeMaliVm::reset()
 {
     if(source_)for(size_t i = 0; i < tables_; ++i)source_->release(page_[i]);
     memset(page_, 0, sizeof(page_));
+    memset(physHash_, 0, sizeof(physHash_));
     memset(dirtyTables_, 0, sizeof(dirtyTables_));
     tables_ = 0;
     pgd_ = nullptr;
@@ -384,8 +403,7 @@ IOReturn NativeMaliVm::unmap(uint64_t iova, uint64_t bytes)
     for(uint64_t offset = 0; offset < bytes; ) {
         uint64_t *l3 = nullptr;
         size_t tableIndex = 0;
-        const IOReturn walked = findL3(page_, tables_, pgd_, geometry_,
-            iova + offset, &l3, &tableIndex);
+        const IOReturn walked = findL3(iova + offset, &l3, &tableIndex);
         if(walked != kIOReturnSuccess)return walked;
         const uint32_t startSlot = index(iova + offset, kMaxLevels - 1);
         const uint64_t remaining = (bytes - offset) >> kGranuleShift;
@@ -417,8 +435,7 @@ IOReturn NativeMaliVm::descriptor(uint64_t iova, uint64_t *pte) const
     if(!prepared_)return kIOReturnNotReady;
     if(iova >= geometry_.span)return kIOReturnBadArgument;
     uint64_t *l3 = nullptr;
-    const IOReturn walked = findL3(page_, tables_, pgd_, geometry_, iova, &l3,
-        nullptr);
+    const IOReturn walked = findL3(iova, &l3, nullptr);
     if(walked != kIOReturnSuccess)return walked;
     if(l3)*pte = l3[index(iova, kMaxLevels - 1)];
     return kIOReturnSuccess;

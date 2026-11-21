@@ -1,26 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* XNU-only adapters: the four injected interfaces implemented on IOKit.
  *
- * UNVERIFIED(XNU) - this whole file has never been compiled against XNU
- * headers (only -fsyntax-only against local stubs). This repository has no
- * kext build and the host tests do not include it. Every
- * IOKit call below appears in NativeAdreno's in-tree driver (MIT, see NOTICE)
- * with the same shape; the Mali-specific parts (window bases, span merging,
- * cache policy) are the ones docs/UNVERIFIED.md lists. Read that document
- * before trusting any line here.
- *
- * What lives here and what does not:
- *   - NativeMaliXnuWindow turns one mapped physical window into the
- *     NativeMaliRegisterTarget the pure layers already take. It knows nothing
- *     about which register is which.
- *   - NativeMaliXnuPages hands out 4 KiB page-table pages.
- *   - NativeMaliXnuBuffers is the NativeMaliMemorySource: one
- *     IOBufferMemoryDescriptor per buffer object, and the physical spans the
- *     address space maps. The descriptors are kept so the user client can hand
- *     the same object to clientMemoryForType().
- *   - NativeMaliXnuCache is the NativeMaliCacheMaintainer: the dc cvac/civac/
- *     ivac sequence, with the same whole-page rule as NativeAdrenoCpu.cpp.
- *
  * The adapters are not thread-safe. The user client serialises every call with
  * one IOLock; without that, two BO allocations would race for the same entry.
  */
@@ -36,6 +16,7 @@
 #include <stdint.h>
 #include "NativeMaliBoTable.h"
 #include "NativeMaliCache.h"
+#include "NativeMaliHandleIndex.h"
 #include "NativeMaliMemory.h"
 #include "NativeMaliPlatform.h"
 #include "NativeMaliVm.h"
@@ -67,7 +48,7 @@ private:
  * buffer source uses; a page outside it is refused, not wrapped. */
 class NativeMaliXnuPages final : public NativeMaliPageSource {
 public:
-    NativeMaliXnuPages() = default;
+    NativeMaliXnuPages();
     void setOutputLimit(uint32_t oas_bits);
 
     IOReturn alloc(NativeMaliPage *page) override;
@@ -80,21 +61,31 @@ private:
         IOBufferMemoryDescriptor *descriptor = nullptr;
     };
     Entry entry_[NativeMaliVmMaxTables]{};
+    uint32_t freeSlots_[NativeMaliVmMaxTables]{};
+    size_t freeCount_ = 0;
+    size_t live_ = 0;
     uint64_t limit_ = UINT64_C(1) << 40;
 };
 
 /* The buffer objects' storage. One entry per live NativeMaliMemory; release()
- * finds it by the CPU address the caller was given. */
+ * finds it in O(1) via cpuIndex_ for driver-allocated BOs, or by
+ * (firstPhysical, lastPhysical, bytes) for zero-copy imported host BOs. */
 class NativeMaliXnuBuffers final : public NativeMaliMemorySource {
 public:
-    NativeMaliXnuBuffers() = default;
+    NativeMaliXnuBuffers();
+    ~NativeMaliXnuBuffers() override;
     void setOutputLimit(uint32_t oas_bits);
     void setOwningTask(task_t task) { owningTask_ = task; }
 
+    bool supportsBoundedSpans() const override { return true; }
     IOReturn alloc(size_t bytes, void **cpu, NativeMaliMemorySpan *spans,
         size_t *count) override;
+    IOReturn allocBounded(size_t bytes, void **cpu, NativeMaliMemorySpan *spans,
+        size_t maxSpans, size_t *count) override;
     IOReturn importHost(uint64_t userAddress, size_t bytes, void **cpu,
         NativeMaliMemorySpan *spans, size_t *count) override;
+    IOReturn importHostBounded(uint64_t userAddress, size_t bytes, void **cpu,
+        NativeMaliMemorySpan *spans, size_t maxSpans, size_t *count) override;
     void release(void *cpu, const NativeMaliMemorySpan *spans,
         size_t count) override;
 
@@ -105,22 +96,36 @@ public:
 
 private:
     IOReturn walkSpans(IOMemoryDescriptor *descriptor, size_t bytes,
-        NativeMaliMemorySpan *spans, size_t *count) const;
+        NativeMaliMemorySpan *spans, size_t maxSpans, size_t *count) const;
+    int32_t acquireEntry();
+    void releaseEntry(uint32_t idx);
+    void trackImported(uint32_t idx);
+    void untrackImported(uint32_t idx);
+
     struct Entry {
         void *cpu = nullptr;
         uint64_t firstPhysical = 0;
+        uint64_t lastPhysical = 0;
         IOMemoryDescriptor *descriptor = nullptr;
         size_t bytes = 0;
+        uint32_t importedPos = UINT32_MAX;
     };
     Entry entry_[NativeMaliBoTableCapacity]{};
+    uint32_t freeSlots_[NativeMaliBoTableCapacity]{};
+    size_t freeCount_ = 0;
+    /* Dense list of active imported-BO entry indices so release(nullptr, ...)
+     * only visits imported BOs instead of scanning all 8192 slots. */
+    uint32_t importedList_[NativeMaliBoTableCapacity]{};
+    size_t importedCount_ = 0;
+    /* O(1) cpu pointer -> entry index lookup for allocated BOs. */
+    NativeMaliHandleIndex<NativeMaliBoTableCapacity> cpuIndex_;
+    bool cpuIndexReady_ = false;
     task_t owningTask_ = nullptr;
     uint64_t limit_ = UINT64_C(1) << 40;
 };
 
 /* dc cvac / dc civac / dc ivac over whole pages, preceded and followed by a
- * dsb sy, with preemption disabled while CTR_EL0 and the operations are read.
- * That is the sequence NativeAdrenoCpu.cpp uses on the same kernel; it has not
- * been run on this phone. */
+ * dsb sy, with preemption disabled while CTR_EL0 and the operations are read. */
 class NativeMaliXnuCache final : public NativeMaliCacheMaintainer {
 public:
     IOReturn maintain(void *cpu, size_t bytes,

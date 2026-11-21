@@ -88,6 +88,21 @@ public:
         (void)count;
         return kIOReturnUnsupported;
     }
+    /* Optional bounded-span fast path: sources that honour `maxSpans` avoid
+     * allocating a 1.5 MiB temporary span buffer on every small BO. */
+    virtual bool supportsBoundedSpans() const { return false; }
+    virtual IOReturn allocBounded(size_t bytes, void **cpu,
+        NativeMaliMemorySpan *spans, size_t maxSpans, size_t *count)
+    {
+        (void)maxSpans;
+        return alloc(bytes, cpu, spans, count);
+    }
+    virtual IOReturn importHostBounded(uint64_t userAddress, size_t bytes,
+        void **cpu, NativeMaliMemorySpan *spans, size_t maxSpans, size_t *count)
+    {
+        (void)maxSpans;
+        return importHost(userAddress, bytes, cpu, spans, count);
+    }
     virtual void release(void *cpu, const NativeMaliMemorySpan *spans,
         size_t count) = 0;
 };
@@ -95,6 +110,7 @@ public:
 class NativeMaliMemory final {
     NativeMaliMemorySource *source_ = nullptr;
     NativeMaliCacheMaintainer *maintainer_ = nullptr;
+    NativeMaliMemorySpan inlineSpan_{};
     NativeMaliMemorySpan *span_ = nullptr;
     size_t spanCap_ = 0;
     size_t spans_ = 0;

@@ -237,6 +237,7 @@ class NativeMaliGpuClient final : public IOUserClient {
     IOReturn waitFenceYielding(NativeMaliGpuService *service, uint64_t fence,
         uint64_t timeoutNs);
     void dropViews();
+    void dropViewForSlot(uint32_t slotIndex);
     void dropDeadViews();
     View *viewSlot(uint32_t token);
 
@@ -791,6 +792,15 @@ void NativeMaliGpuClient::dropViews()
         }
 }
 
+void NativeMaliGpuClient::dropViewForSlot(uint32_t slotIndex)
+{
+    if(!views_ || slotIndex >= NativeMaliBoTableCapacity)return;
+    if(views_[slotIndex].descriptor) {
+        views_[slotIndex].descriptor->release();
+        views_[slotIndex] = View{};
+    }
+}
+
 void NativeMaliGpuClient::dropDeadViews()
 {
     /* After a BoFree the freed token no longer resolves; every other live
@@ -855,10 +865,10 @@ void NativeMaliGpuClient::afterMethod(uint32_t method, const void *input,
     if(method == NativeMaliMethodBoCpuUnmap && input) {
         const NativeMaliAbiBoCpuUnmap *request =
             static_cast<const NativeMaliAbiBoCpuUnmap *>(input);
-        NativeMaliMemory *memory = session_->core.memoryForToken(request->token);
-        /* The CPU is done writing this BO: write the cache back before the GPU
-         * reads it. UNVERIFIED(HW): the clean-on-unmap/invalidate-on-map policy
-         * has not been tested for coherency on this phone (docs/UNVERIFIED.md). */
+        /* cpuUnmap() already cleared the token before afterMethod() runs, so
+         * look up by handle; otherwise memoryForToken() always returns null
+         * and the cache clean is silently skipped. */
+        NativeMaliMemory *memory = session_->core.memory(request->handle);
         if(memory) {
             const IOReturn status = memory->cleanForDevice(0, memory->bytes());
             if(status != kIOReturnSuccess)
@@ -881,10 +891,6 @@ void NativeMaliGpuClient::afterMethod(uint32_t method, const void *input,
             if(status != kIOReturnSuccess)
                 IOLog("NativeMali: invalidate on map failed 0x%x\n", status);
         }
-    } else if(method == NativeMaliMethodBoFree) {
-        /* The handle is gone; drop the views whose tokens no longer resolve,
-         * and leave every still-mapped BO alone. */
-        dropDeadViews();
     }
     if(native_gop_text) {
         char trace[96];
@@ -1080,6 +1086,17 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
                 IOLockLock(service->sessionLock());
                 status = kIOReturnSuccess;
             }
+        } else if(arguments->selector == NativeMaliMethodBoFree &&
+            arguments->structureInput &&
+            arguments->structureInputSize == sizeof(NativeMaliAbiBoFree)) {
+            const NativeMaliAbiBoFree *req =
+                static_cast<const NativeMaliAbiBoFree *>(arguments->structureInput);
+            const uint32_t freedSlot = session->core.slotIndexForHandle(req->handle);
+            status = session->core.dispatch(arguments->selector,
+                arguments->structureInput, arguments->structureInputSize,
+                arguments->structureOutput, arguments->structureOutputSize);
+            if(status == kIOReturnSuccess)
+                client->dropViewForSlot(freedSlot);
         } else {
             status = session->core.dispatch(arguments->selector,
                 arguments->structureInput, arguments->structureInputSize,

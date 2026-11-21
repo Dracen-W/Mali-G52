@@ -37,6 +37,7 @@ enum {
 enum {
     kIOMapAnywhere = 0x1,
     kIOMapInhibitCache = 0x2,
+    kIOMapWriteCombineCache = 0x400,
     kIODirectionOut = 1,
     kIODirectionInOut = 0x4,
     kIOMemoryMapperNone = 0x8,
