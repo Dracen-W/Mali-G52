@@ -156,6 +156,12 @@ public:
      * dependency fence, a dependency that times out or faults, no idle slot
      * (Busy), or the flush-id read failing. The reply fence is zeroed on every
      * refusal. */
+    /* Non-blocking pre-check for XNU yielding submit: returns true and writes
+     * the packed fence if this client already has an in-flight job on the
+     * preferred hardware slot for `jobChain`, so the kernel wrapper can wait
+     * without holding the global session lock. */
+    bool pendingOwnSlotFence(uint64_t jobChain, uint64_t *fence);
+
     IOReturn submit(const NativeMaliAbiSubmit &request,
         NativeMaliAbiSubmitReply *reply);
     /* Wait until the job that produced this fence has been reaped. Success is

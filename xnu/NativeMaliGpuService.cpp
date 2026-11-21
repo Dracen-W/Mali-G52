@@ -966,10 +966,10 @@ IOReturn NativeMaliGpuClient::waitFenceYielding(NativeMaliGpuService *service,
     uint64_t startNs = 0;
     absolutetime_to_nanoseconds(startAbs, &startNs);
     /* Two-stage spin before falling back to IOSleep(1):
-     *   - 0..500 us:   10 us poll (catches fast vertex/tiler/small passes immediately)
+     *   - 0..500 us:    10 us poll (catches fast vertex/tiler/small passes immediately)
      *   - 500..2500 us: 50 us poll (catches typical 1-2.5 ms UI fragment passes without
      *                   paying XNU's multi-ms timer-coalesced IOSleep(1) wakeup latency)
-     *   - >2500 us:    IOSleep(1) so genuinely heavy jobs yield the CPU cleanly.
+     *   - >2500 us:     IOSleep(1) so genuinely heavy jobs yield the CPU cleanly.
      * sessionLock() is always released between polls so concurrent Metal clients run freely. */
     const uint64_t fastSpinNs = UINT64_C(500000);
     const uint64_t medSpinNs = UINT64_C(2500000);
@@ -1035,14 +1035,50 @@ IOReturn NativeMaliGpuClient::action(OSObject *target, void *,
             if(req->wait_fence != 0 && req->wait_timeout_ns != 0)
                 status = client->waitFenceYielding(service, req->wait_fence,
                     req->wait_timeout_ns);
-            if(status == kIOReturnSuccess) {
+            uint64_t busyStartAbs = 0;
+            uint64_t busyStartNs = 0;
+            bool busyTiming = false;
+            constexpr uint64_t kSlotWaitBudgetNs = UINT64_C(5000000000);
+            while(status == kIOReturnSuccess) {
                 session = client->session_;
-                if(session && service->device().clientUsable(&session->core))
-                    status = session->core.dispatch(arguments->selector,
-                        arguments->structureInput, arguments->structureInputSize,
-                        arguments->structureOutput, arguments->structureOutputSize);
-                else
+                if(!session || !service->device().clientUsable(&session->core)) {
                     status = kIOReturnNotReady;
+                    break;
+                }
+                /* If this client still has an in-flight job on the preferred
+                 * hardware slot, drain it via waitFenceYielding() so we NEVER
+                 * spin-wait inside NativeMaliUserClient::submit() while holding
+                 * the global sessionLock(). */
+                uint64_t ownFence = 0;
+                if(session->core.pendingOwnSlotFence(req->job_chain, &ownFence)) {
+                    status = client->waitFenceYielding(service, ownFence, kSlotWaitBudgetNs);
+                    continue;
+                }
+                status = session->core.dispatch(arguments->selector,
+                    arguments->structureInput, arguments->structureInputSize,
+                    arguments->structureOutput, arguments->structureOutputSize);
+                if(status != kIOReturnBusy)break;
+                /* Another client (e.g. SpringBoard / mediaserverd) currently
+                 * owns the hardware slot: release sessionLock() and yield so
+                 * it can reap its fence, then retry. */
+                uint64_t nowAbs = 0, nowNs = 0;
+                clock_get_uptime(&nowAbs);
+                absolutetime_to_nanoseconds(nowAbs, &nowNs);
+                if(!busyTiming) {
+                    busyStartAbs = nowAbs;
+                    busyStartNs = nowNs;
+                    busyTiming = true;
+                    (void)busyStartAbs;
+                }
+                const uint64_t elapsedNs = nowNs - busyStartNs;
+                if(elapsedNs >= kSlotWaitBudgetNs)break;
+                IOLockUnlock(service->sessionLock());
+                if(elapsedNs < UINT64_C(500000))
+                    IODelay(20);
+                else
+                    IOSleep(1);
+                IOLockLock(service->sessionLock());
+                status = kIOReturnSuccess;
             }
         } else {
             status = session->core.dispatch(arguments->selector,

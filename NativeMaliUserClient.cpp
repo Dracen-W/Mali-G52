@@ -206,6 +206,19 @@ IOReturn NativeMaliUserClient::waitForFence(const NativeMaliFence &fence,
     return result;
 }
 
+bool NativeMaliUserClient::pendingOwnSlotFence(uint64_t jobChain, uint64_t *fence)
+{
+    if(!open_ || !fence || !jobs_)return false;
+    uint32_t jobType = 0;
+    if(!bo_.readJobType(jobChain, NativeMaliJobHeadAlignment, &jobType) || jobType == 0)
+        return false;
+    const uint32_t preferred = (jobType == 9u) ? 0u : 1u;
+    if((jobs_->present() & (1u << preferred)) == 0)return false;
+    if(!ownOutstanding(preferred))return false;
+    *fence = NativeMaliAbiValidate::packFence(preferred, submitted_[preferred]);
+    return true;
+}
+
 IOReturn NativeMaliUserClient::submit(const NativeMaliAbiSubmit &request,
     NativeMaliAbiSubmitReply *reply)
 {
