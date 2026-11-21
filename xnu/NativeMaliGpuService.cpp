@@ -965,7 +965,14 @@ IOReturn NativeMaliGpuClient::waitFenceYielding(NativeMaliGpuService *service,
     clock_get_uptime(&startAbs);
     uint64_t startNs = 0;
     absolutetime_to_nanoseconds(startAbs, &startNs);
-    const uint64_t spinBudgetNs = UINT64_C(500000); /* 500 us fast spin, then yield */
+    /* Two-stage spin before falling back to IOSleep(1):
+     *   - 0..500 us:   10 us poll (catches fast vertex/tiler/small passes immediately)
+     *   - 500..2500 us: 50 us poll (catches typical 1-2.5 ms UI fragment passes without
+     *                   paying XNU's multi-ms timer-coalesced IOSleep(1) wakeup latency)
+     *   - >2500 us:    IOSleep(1) so genuinely heavy jobs yield the CPU cleanly.
+     * sessionLock() is always released between polls so concurrent Metal clients run freely. */
+    const uint64_t fastSpinNs = UINT64_C(500000);
+    const uint64_t medSpinNs = UINT64_C(2500000);
 
     for(;;) {
         Session *session = session_;
@@ -983,12 +990,11 @@ IOReturn NativeMaliGpuClient::waitFenceYielding(NativeMaliGpuService *service,
         const uint64_t elapsedNs = nowNs - startNs;
         if(elapsedNs >= timeoutNs)return kIOReturnTimeout;
 
-        /* Release the global session lock while waiting so other Metal clients
-         * (SpringBoard, Preferences, mediaserverd) are not stalled, and sleep
-         * 1 ms once past the sub-millisecond fast spin so CPU cores stay free. */
         IOLockUnlock(service->sessionLock());
-        if(elapsedNs < spinBudgetNs)
-            IODelay(20);
+        if(elapsedNs < fastSpinNs)
+            IODelay(10);
+        else if(elapsedNs < medSpinNs)
+            IODelay(50);
         else
             IOSleep(1);
         IOLockLock(service->sessionLock());
