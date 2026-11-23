@@ -1,3 +1,10 @@
+# Mali-G52 (MT6768 Kernel Service)
+
+> **Status (2026-11-23)**
+> - **iPadOS 17.7.11 (`21H461`)**: Confirmed working on hardware alongside `MaliMetal`, **not yet fully stress-tested**.
+> - **iOS 16.7.16 (`20H392`)**: Confirmed working on hardware (`GPU_ID 0x74021000`, 849 MHz, `MALI M1 QUERY OK` / `M2 INFO OK` for `mediaserverd` and `backboardd`).
+> - **Unified Config**: See [`configs/example.config`](configs/example.config) for `CONFIG_XNU_DW_MALIG52_*` switches (`M2_WRITES`, `M3_WRITES`, `M4_WRITES`, `M6_WRITES`, `LOG_LEVEL`), overridden by `UniXNU-merlinx/configs/merlinx-iOS16.7.config` at build time.
+
 # NativeMali
 
 Native XNU driver for the MediaTek MT6768 Mali-G52 MC2 (Bifrost v7, Job Manager).

@@ -1,3 +1,18 @@
+#pragma once
+// Unified CONFIG_XNU_DW_MALIG52_* macro bridge (keeps legacy -DNATIVE_MALI_M*_WRITES compatible).
+#if defined(CONFIG_XNU_DW_MALIG52_M2_WRITES) && CONFIG_XNU_DW_MALIG52_M2_WRITES && !defined(NATIVE_MALI_M2_WRITES)
+#define NATIVE_MALI_M2_WRITES 1
+#endif
+#if defined(CONFIG_XNU_DW_MALIG52_M3_WRITES) && CONFIG_XNU_DW_MALIG52_M3_WRITES && !defined(NATIVE_MALI_M3_WRITES)
+#define NATIVE_MALI_M3_WRITES 1
+#endif
+#if defined(CONFIG_XNU_DW_MALIG52_M4_WRITES) && CONFIG_XNU_DW_MALIG52_M4_WRITES && !defined(NATIVE_MALI_M4_WRITES)
+#define NATIVE_MALI_M4_WRITES 1
+#endif
+#if defined(CONFIG_XNU_DW_MALIG52_M6_WRITES) && CONFIG_XNU_DW_MALIG52_M6_WRITES && !defined(NATIVE_MALI_M6_WRITES)
+#define NATIVE_MALI_M6_WRITES 1
+#endif
+
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* XNU-only adapters: the four injected interfaces implemented on IOKit.
  *
